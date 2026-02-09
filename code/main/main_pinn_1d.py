@@ -8,7 +8,7 @@ import numpy as np
 
 from src.pde import fd_solve, u_exact, create_grid
 from src.pinn import train_pinn
-from src.experiment import test_explicit_scheme_at_t, absolute_error, relative_error
+from src.experiment import absolute_error, relative_error, run_architecture_sweep
 from src.plotting import (
     plot_solution_at_t,
     plot_scheme_error_at_t,
@@ -91,4 +91,29 @@ subplot_fig = subplot_3d_surfaces(
     savefig=True,
     save_path="../figs/analytical_fd_pinn_silu_subplot.pdf",
     show=True,
+)
+
+
+
+run_architecture_sweep(
+    hidden_widths=[32, 64],
+    num_hidden_layers=[1, 2],
+    activation_fns={
+        'tanh': jnn.tanh,
+        'sine': jnp.sin,
+        # 'GeLU': jnn.gelu,
+        # 'SiLU': jnn.swish,
+        # 'ReLU': jnn.relu,
+    },
+    T=1.0,
+    steps=1000,
+    N_int=1000,
+    lr=1e-3,
+    seeds=(0,),
+    Nx_eval=100,
+    Ny_eval=None,
+    Nt_eval=100,
+    save_to_csv=True,
+    use_pre_computed=False,
+    data_dir="../data/1d_constant/",
 )

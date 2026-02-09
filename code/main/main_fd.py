@@ -8,7 +8,7 @@ import numpy as np
 
 from src.pde import fd_solve, u_exact, create_grid
 from src.pinn import train_pinn
-from src.experiment import test_explicit_scheme_at_t, absolute_error, relative_error
+from src.experiment import absolute_error, relative_error
 from src.plotting import (
     plot_solution_at_t,
     plot_scheme_error_at_t,
