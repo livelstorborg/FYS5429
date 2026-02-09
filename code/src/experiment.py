@@ -4,43 +4,96 @@ import pandas as pd
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
+import numpy as np
 
 from src.pde import fd_solve, u_exact
-from src.plotting import plot_solution
 from src.pinn import train_pinn, compute_error_metrics
 
 
-def test_explicit_scheme(Nx=100, T=0.5, alpha=0.4, t1=0.07, t2=0.30):
-    u_num, x, t = fd_solve(Nx=Nx, T=T, alpha=alpha)
+def test_explicit_scheme_at_t(
+    Nx=100,
+    Ny=None,
+    Nz=None,
+    T=0.5,
+    c=1.0,
+    cfl=0.5,
+    t_eval=0.07,
+    dim=1,
+):
+    """
+    Compute numerical and analytical solution at a given time t_eval.
+    Returns 1D slice of the solution.
+    """
 
-    i1 = jnp.argmin(jnp.abs(t - t1))
-    i2 = jnp.argmin(jnp.abs(t - t2))
+    # Solve PDE
+    if dim == 1:
+        u_num, x, t = fd_solve(Nx=Nx, T=T, c=c, cfl=cfl, dim=1)
+        u_true = u_exact(x, t=t, c=c, dim=1)
 
-    u_true = u_exact(x, t)
+    elif dim == 2:
+        if Ny is None:
+            raise ValueError("Ny must be provided for dim=2")
+        u_num, x, y, t = fd_solve(Nx=Nx, Ny=Ny, T=T, c=c, cfl=cfl, dim=2)
+        u_true = u_exact(x, y=y, t=t, c=c, dim=2)
 
-    plot_solution(
-        x,
-        u_num[i1],
-        u_true[i1],
-        title=rf"$\mathbf{{t_1 = {float(t[i1]):.3f}}}$, $\mathbf{{\Delta x = {1 / Nx:.2f}}}$",
-        filepath=f"../figs/t1_dx{1 / Nx:.2f}.pdf",
-    )
-    plot_solution(
-        x,
-        u_num[i2],
-        u_true[i2],
-        title=rf"$\mathbf{{t_2 = {float(t[i2]):.3f}}}$, $\mathbf{{\Delta x = {1 / Nx:.2f}}}$",
-        filepath=f"../figs/t2_dx{1 / Nx:.2f}.pdf",
-    )
+    elif dim == 3:
+        if Ny is None or Nz is None:
+            raise ValueError("Ny and Nz must be provided for dim=3")
+        u_num, x, y, z, t = fd_solve(
+            Nx=Nx, Ny=Ny, Nz=Nz, T=T, c=c, cfl=cfl, dim=3
+        )
+        u_true = u_exact(x, y=y, z=z, t=t, c=c, dim=3)
+
+    else:
+        raise ValueError("dim must be 1, 2, or 3")
+
+    # Time index
+    i = jnp.argmin(jnp.abs(t - t_eval))
+
+    # Extract 1D slice
+    if dim == 1:
+        u_num_slice = u_num[i]
+        u_true_slice = u_true[i]
+        grid = x
+        dx = 1 / Nx
+
+    elif dim == 2:
+        j = len(y) // 2
+        u_num_slice = u_num[i, :, j]
+        u_true_slice = u_true[i, :, j]
+        grid = x
+        dx = 1 / Nx
+
+    elif dim == 3:
+        j = len(y) // 2
+        k = len(z) // 2
+        u_num_slice = u_num[i, :, j, k]
+        u_true_slice = u_true[i, :, j, k]
+        grid = x
+        dx = 1 / Nx
 
     return {
-        "t1": t[i1],
-        "t2": t[i2],
-        "dx": 1 / Nx,
-        "x": x,
-        "t1_error": u_true[i1] - u_num[i1],
-        "t2_error": u_true[i2] - u_num[i2],
+        "dim": dim,
+        "dx": dx,
+        "grid": grid,
+        "u_num": u_num_slice,
+        "u_true": u_true_slice,
+        "t": t[i],
+        "error": u_true_slice - u_num_slice,
+        "max_error": jnp.max(jnp.abs(u_true - u_num)),
     }
+
+
+def absolute_error(u_num, u_true):
+    return np.abs(u_num - u_true)
+
+def relative_error(u_num, u_true, eps=1e-8):
+    return np.abs(u_num - u_true) / (np.abs(u_true) + eps)
+
+
+
+
+
 
 
 # -----------------------------------------------------------------------------
@@ -57,6 +110,8 @@ def run_architecture_sweep(
     lr=1e-3,
     seeds=(0,),
     Nx_eval=100,
+    Ny_eval=None,
+    Nz_eval=None,
     Nt_eval=100,
     save_to_csv=False,
     use_pre_computed=False,
