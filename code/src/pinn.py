@@ -272,7 +272,7 @@ def train_pinn(
 
 def compute_error_metrics(model, x, y=None, z=None, t=None, c=1.0, dim=1):
     """
-    Compute L² relative and L∞ errors for PINN in 1D, 2D, or 3D.
+    Compute L² relative and L∞ errors for PINN in 1D or 2D.
     
     Parameters:
     -----------
@@ -281,14 +281,14 @@ def compute_error_metrics(model, x, y=None, z=None, t=None, c=1.0, dim=1):
     x : array
         x-coordinates
     y : array, optional
-        y-coordinates (required for dim >= 2)
+        y-coordinates (required for dim=2)
     z : array, optional
-        z-coordinates (required for dim == 3)
+        Not used (kept for compatibility)
     t : array
         time coordinates
     c : float
         wave speed
-    dim : int (1, 2, or 3)
+    dim : int (1 or 2)
         Spatial dimension
     
     Returns:
@@ -320,20 +320,9 @@ def compute_error_metrics(model, x, y=None, z=None, t=None, c=1.0, dim=1):
             u_pred_t = model(xyt).squeeze().reshape(len(x), len(y))
             u_pred_list.append(u_pred_t)
         u_pred = jnp.stack(u_pred_list, axis=0)
-        
-    elif dim == 3:
-        
-        u_true = u_exact(x, y=y, z=z, t=t, c=c, dim=3)
-        
-        u_pred_list = []
-        for ti in t:
-            X, Y, Z = jnp.meshgrid(x, y, z, indexing='ij')
-            T_grid = jnp.full_like(X, ti)
-            xyzt = jnp.stack([X.ravel(), Y.ravel(), Z.ravel(), T_grid.ravel()], axis=1)
-            u_pred_t = model(xyzt).squeeze().reshape(len(x), len(y), len(z))
-            u_pred_list.append(u_pred_t)
-        u_pred = jnp.stack(u_pred_list, axis=0)
-        
+    
+    else:
+        raise ValueError(f"dim must be 1 or 2, got {dim}")
     
     # Compute errors
     error = u_pred - u_true
