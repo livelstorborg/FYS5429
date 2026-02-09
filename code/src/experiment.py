@@ -10,80 +10,7 @@ from src.pde import fd_solve, u_exact
 from src.pinn import train_pinn, compute_error_metrics
 
 
-def test_explicit_scheme_at_t(
-    Nx=100,
-    Ny=None,
-    Nz=None,
-    T=0.5,
-    c=1.0,
-    cfl=0.5,
-    t_eval=0.07,
-    dim=1,
-):
-    """
-    Compute numerical and analytical solution at a given time t_eval.
-    Returns 1D slice of the solution.
-    """
-
-    # Solve PDE
-    if dim == 1:
-        u_num, x, t = fd_solve(Nx=Nx, T=T, c=c, cfl=cfl, dim=1)
-        u_true = u_exact(x, t=t, c=c, dim=1)
-
-    elif dim == 2:
-        if Ny is None:
-            raise ValueError("Ny must be provided for dim=2")
-        u_num, x, y, t = fd_solve(Nx=Nx, Ny=Ny, T=T, c=c, cfl=cfl, dim=2)
-        u_true = u_exact(x, y=y, t=t, c=c, dim=2)
-
-    elif dim == 3:
-        if Ny is None or Nz is None:
-            raise ValueError("Ny and Nz must be provided for dim=3")
-        u_num, x, y, z, t = fd_solve(
-            Nx=Nx, Ny=Ny, Nz=Nz, T=T, c=c, cfl=cfl, dim=3
-        )
-        u_true = u_exact(x, y=y, z=z, t=t, c=c, dim=3)
-
-    else:
-        raise ValueError("dim must be 1, 2, or 3")
-
-    # Time index
-    i = jnp.argmin(jnp.abs(t - t_eval))
-
-    # Extract 1D slice
-    if dim == 1:
-        u_num_slice = u_num[i]
-        u_true_slice = u_true[i]
-        grid = x
-        dx = 1 / Nx
-
-    elif dim == 2:
-        j = len(y) // 2
-        u_num_slice = u_num[i, :, j]
-        u_true_slice = u_true[i, :, j]
-        grid = x
-        dx = 1 / Nx
-
-    elif dim == 3:
-        j = len(y) // 2
-        k = len(z) // 2
-        u_num_slice = u_num[i, :, j, k]
-        u_true_slice = u_true[i, :, j, k]
-        grid = x
-        dx = 1 / Nx
-
-    return {
-        "dim": dim,
-        "dx": dx,
-        "grid": grid,
-        "u_num": u_num_slice,
-        "u_true": u_true_slice,
-        "t": t[i],
-        "error": u_true_slice - u_num_slice,
-        "max_error": jnp.max(jnp.abs(u_true - u_num)),
-    }
-
-
+# ---------- Utils (might delete) ----------
 def absolute_error(u_num, u_true):
     return np.abs(u_num - u_true)
 
@@ -95,10 +22,7 @@ def relative_error(u_num, u_true, eps=1e-8):
 
 
 
-
-# -----------------------------------------------------------------------------
-# Part d: architecture sweep
-# -----------------------------------------------------------------------------
+# ---------- Width/depth sweep ----------
 def run_architecture_sweep(
     hidden_widths,
     num_hidden_layers,
@@ -111,7 +35,6 @@ def run_architecture_sweep(
     seeds=(0,),
     Nx_eval=100,
     Ny_eval=None,
-    Nz_eval=None,
     Nt_eval=100,
     save_to_csv=False,
     use_pre_computed=False,
@@ -126,7 +49,8 @@ def run_architecture_sweep(
     Optional keyword arguments allow further control.
     If use_pre_computed=True, loads results from existing CSV files.
     If save_to_csv=True (and use_pre_computed=False), saves individual
-    seed results to CSV files (one per activation function) in data_dir.
+    seed results to CSV files (one per architecture: activation_L{layers}_N{width}.csv) 
+    in data_dir.
 
     Returns:
       A DataFrame with aggregated results (means over seeds).
@@ -149,8 +73,6 @@ def run_architecture_sweep(
         print(f"---------- {act_name} ----------")
         act_start_time = time.time()
 
-        act_results = []
-
         for L in num_hidden_layers:
             for W in hidden_widths:
                 print(f"Layers: {L}, Nodes: {W}")
@@ -159,10 +81,11 @@ def run_architecture_sweep(
 
                 L2_all = []
                 Linf_all = []
+                arch_results = []  # Store results for this specific architecture
 
                 for seed in seeds:
                     print(f"SEED = {seed}")
-                    model, losses = train_pinn(
+                    model, losses, loss_components = train_pinn(
                         layers=layers,
                         activations=activations,
                         steps=steps,
@@ -172,17 +95,27 @@ def run_architecture_sweep(
                         seed=seed,
                     )
 
+                    # Create evaluation grids
+                    x_eval = jnp.linspace(0, 1, Nx_eval)
+                    t_eval = jnp.linspace(0, T, Nt_eval)
+                    y_eval = jnp.linspace(0, 1, Ny_eval) if Ny_eval else None
+                    
+                    # Determine dimension (1D or 2D only)
+                    dim_eval = 2 if Ny_eval else 1
+
                     L2, Linf = compute_error_metrics(
                         model,
-                        Nx=Nx_eval,
-                        Nt=Nt_eval,
-                        T=T,
+                        x=x_eval,
+                        y=y_eval,
+                        z=None,
+                        t=t_eval,
+                        dim=dim_eval,
                     )
                     L2_all.append(L2)
                     Linf_all.append(Linf)
 
                     if save_to_csv:
-                        act_results.append(
+                        arch_results.append(
                             {
                                 "activation": act_name,
                                 "hidden_layers": L,
@@ -192,6 +125,13 @@ def run_architecture_sweep(
                                 "Linf": float(Linf),
                             }
                         )
+
+                # Save CSV for this specific architecture
+                if save_to_csv and arch_results:
+                    df_arch = pd.DataFrame(arch_results)
+                    filename = os.path.join(data_dir, f"{act_name}_L{L}_N{W}.csv")
+                    df_arch.to_csv(filename, index=False)
+                    print(f"Saved to {filename}")
 
                 result = {
                     "activation": act_name,
@@ -209,12 +149,6 @@ def run_architecture_sweep(
                 all_results.append(result)
                 print("\n")
 
-        if save_to_csv and act_results:
-            df_act = pd.DataFrame(act_results)
-            filename = os.path.join(data_dir, f"sweep_{act_name}.csv")
-            df_act.to_csv(filename, index=False)
-            print(f"Saved {act_name} results to {filename}")
-
         act_elapsed = time.time() - act_start_time
         total_elapsed = time.time() - total_start_time
         print(f"    {act_name} completed in {act_elapsed:.1f}s")
@@ -223,6 +157,19 @@ def run_architecture_sweep(
 
     results_df = pd.DataFrame(all_results)
     return results_df
+
+
+
+
+
+
+# ---------- Learningrate sweep ----------
+def run_learning_rate_sweep():
+    pass
+
+
+
+
 
 
 def load_sweep_results_from_csv(data_dir="../data", activation_fns=None):
