@@ -1,0 +1,2 @@
+activation,hidden_layers,width,seed,L2_rel,Linf
+GeLU,1,16,0,0.4911402463912964,0.543593168258667

@@ -1,0 +1,2 @@
+activation,hidden_layers,width,seed,L2_rel,Linf
+tanh,1,32,0,0.1510321944952011,0.1795976161956787

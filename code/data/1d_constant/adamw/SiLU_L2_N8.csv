@@ -1,0 +1,2 @@
+activation,hidden_layers,width,seed,L2_rel,Linf
+SiLU,2,8,0,0.007662322372198105,0.010087549686431885
