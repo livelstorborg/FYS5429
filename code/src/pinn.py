@@ -201,6 +201,8 @@ def train_pinn(
     lr=1e-3,
     seed=0,
     dim=1,
+    optimizer='adam',
+    grad_clip=1.0,  # ← NEW parameter
 ):
     """
     Train PINN for wave equation in 1D or 2D.
@@ -212,17 +214,110 @@ def train_pinn(
     key_model, key_loop = jax.random.split(main_key)
 
     model = MLP_HardBC(layers, activations, key=key_model)
+    key = key_loop
 
+    # ===== L-BFGS (separate handling) =====
+    # I train_pinn, L-BFGS section:
+    if optimizer.lower() == 'lbfgs':
+        from jaxopt import LBFGS
+        
+        # Sample fixed points
+        x_int, t_int, x_ic, t_ic = sample_points_wave(
+            key, N_int, N_ic, T=T, L=L
+        )
+        
+        def loss_for_lbfgs(model_state):
+            """Loss function with JAX-compatible NaN/Inf handling"""
+            temp_model = nnx.clone(model)
+            nnx.update(temp_model, model_state)
+            
+            loss_val, components = loss_fn(
+                temp_model, x_int, t_int, x_ic, t_ic, 
+                c=c, lambda_ic=lambda_ic, dim=dim
+            )
+            
+            # ===== JAX-COMPATIBLE ERROR HANDLING =====
+            # Replace NaN/Inf with large but finite value
+            is_bad = jnp.isnan(loss_val) | jnp.isinf(loss_val)
+            loss_val = jnp.where(is_bad, 1e6, loss_val)
+            
+            # Clip to safe range
+            loss_val = jnp.clip(loss_val, 0.0, 1e6)
+            # ==========================================
+            
+            return loss_val
+        
+        params_init = nnx.state(model, nnx.Param)
+        
+        solver = LBFGS(
+            fun=loss_for_lbfgs,
+            maxiter=steps,
+            tol=1e-6,
+            linesearch='backtracking',
+            maxls=15,
+        )
+        
+
+        
+        print(f"Training PINN for {dim}D wave equation (c={c}, T={T})...")
+        print(f"Optimizer: L-BFGS (JAXopt)")
+        print(f"Architecture: {layers}")
+        print(f"Max iterations: {steps}")
+        print("-" * 60)
+        
+        result = solver.run(params_init)
+        nnx.update(model, result.params)
+        
+        final_loss, final_components = loss_fn(
+            model, x_int, t_int, x_ic, t_ic,
+            c=c, lambda_ic=lambda_ic, dim=dim
+        )
+        
+        print(f"[L-BFGS] Converged in {result.state.iter_num} iterations")
+        print(f"Final loss: {float(final_loss):.3e}")
+        print(f"  pde={float(final_components['pde']):.3e} | "
+              f"ic_u={float(final_components['ic_u']):.3e} | "
+              f"ic_ut={float(final_components['ic_ut']):.3e}")
+        
+        losses = jnp.array([float(final_loss)])
+        loss_components = {
+            'pde': [float(final_components['pde'])],
+            'ic_u': [float(final_components['ic_u'])],
+            'ic_ut': [float(final_components['ic_ut'])],
+        }
+        
+        return model, losses, loss_components
+    
+    # ===== First-order optimizers with gradient clipping =====
     schedule = optax.exponential_decay(
         init_value=lr,
         transition_steps=1000,
         decay_rate=0.95,
     )
-    opt = nnx.Optimizer(model, optax.adam(schedule), wrt=nnx.Param)
-
+    
+    if not hasattr(optax, optimizer):
+        raise ValueError(
+            f"Unknown optimizer: {optimizer}. "
+            f"Available: adam, adamw, sgd, rmsprop, nadam"
+        )
+    
+    # ===== ADD GRADIENT CLIPPING =====
+    base_optimizer = getattr(optax, optimizer)(schedule)
+    
+    if grad_clip is not None and grad_clip > 0:
+        # Chain optimizer with gradient clipping
+        optimizer_with_clip = optax.chain(
+            optax.clip_by_global_norm(grad_clip),  # ← Clip gradients
+            base_optimizer
+        )
+        opt = nnx.Optimizer(model, optimizer_with_clip, wrt=nnx.Param)
+        print(f"Gradient clipping enabled: max_norm={grad_clip}")
+    else:
+        opt = nnx.Optimizer(model, base_optimizer, wrt=nnx.Param)
+    # ================================
+    
     losses = []
     loss_components = {'pde': [], 'ic_u': [], 'ic_ut': []}
-    key = key_loop
 
     @jax.jit
     def train_step(model, opt, key):
@@ -246,6 +341,7 @@ def train_pinn(
         return model, opt, key, loss, components
 
     print(f"Training PINN for {dim}D wave equation (c={c}, T={T})...")
+    print(f"Optimizer: {optimizer}")
     print(f"Architecture: {layers}")
     print(f"Steps: {steps}, N_int: {N_int}, N_ic: {N_ic}")
     print("-" * 60)
@@ -266,7 +362,6 @@ def train_pinn(
             )
 
     return model, jnp.array(losses), loss_components
-
 
 
 
