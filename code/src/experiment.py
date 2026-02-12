@@ -36,6 +36,7 @@ def run_architecture_sweep(
     Nx_eval=100,
     Ny_eval=None,
     Nt_eval=100,
+    optimizer='adam',
     save_to_csv=False,
     use_pre_computed=False,
     data_dir="data",
@@ -93,6 +94,7 @@ def run_architecture_sweep(
                         T=T,
                         lr=lr,
                         seed=seed,
+                        optimizer=optimizer,
                     )
 
                     # Create evaluation grids
