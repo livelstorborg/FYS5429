@@ -43,8 +43,6 @@ def create_grid(Nx, Ny=None, T=1.0, c=1.0, cfl=0.5, dim=1):
         Nt = int(T / dt)
 
         x = jnp.linspace(0, 1, Nx + 1)
-        t = jnp.linspace(0, T, Nt + 1)
-
         t = jnp.arange(0, Nt + 1) * dt  # exact spacing
         
         return x, t, dx, dt
@@ -61,8 +59,6 @@ def create_grid(Nx, Ny=None, T=1.0, c=1.0, cfl=0.5, dim=1):
         x = jnp.linspace(0, 1, Nx + 1)
         y = jnp.linspace(0, 1, Ny + 1)
         t = jnp.arange(0, Nt + 1) * dt  # exact spacing
-        
-        t = jnp.linspace(0, T, Nt + 1)
 
         return x, y, t, dx, dy, dt
 
@@ -247,9 +243,6 @@ def _fem_solve_2d(x, t, dx, dt, y, dy, c):
         M_lumped = M_lumped.at[j].set(1.0)
         M_lumped = M_lumped.at[Nx * (Ny + 1) + j].set(1.0)
 
-    kx = 1.0 / dx
-    ky = 1.0 / dy
-    
     kx = 1.0 / dx**2
     ky = 1.0 / dy**2
     r = (c * dt) ** 2
