@@ -19,266 +19,87 @@ def plot_solution_at_t(
     dim,
     filepath,
 ):
-    """
-    Plot numerical vs analytical solution at a fixed time.
-    
-    Parameters:
-    -----------
-    grid : array
-        Spatial grid points (x coordinates)
-    u_num : array or list of arrays
-        Numerical solution(s) at time t
-    u_true : array or list of arrays
-        Analytical solution(s) at time t
-    dx : float
-        Spatial step size
-    t : float or list of floats
-        Time point(s) to plot
-    dim : int
-        Spatial dimension
-    filepath : str
-        Path to save the figure
-    """
-    
-    # Check if t is a list (multiple time points)
-    if isinstance(t, list):
-        num_plots = len(t)
-        fig, axes = plt.subplots(1, num_plots, figsize=(6*num_plots, 5))
-        
-        # Add main title
-        fig.suptitle(
-            rf"$\mathbf{{{dim}D}}$ Wave Equation, $\mathbf{{\Delta x = {dx:.3f}}}$",
-            fontsize=20,
-            fontweight="bold",
-            y=0.98
-        )
-        
-        # Handle single subplot case
-        if num_plots == 1:
-            axes = [axes]
-        
-        for idx, ax in enumerate(axes):
-            # Get solution at this time
-            grid_t = grid[idx] if isinstance(grid, list) else grid
-            u_num_t = u_num[idx] if isinstance(u_num, list) else u_num
-            u_true_t = u_true[idx] if isinstance(u_true, list) else u_true
-            t_val = t[idx]
-            
-            ax.plot(grid_t, u_true_t, label="Analytical", color="red", linewidth=5, alpha=0.5)
-            ax.plot(grid_t, u_num_t, ":", label="Numerical", color="blue", linewidth=3)
-            ax.grid(alpha=0.3)
-            ax.tick_params(axis='both', labelsize=16)
-            ax.set_xlabel("x", fontsize=16)
-            ax.set_ylabel("u(x, t)", fontsize=16)
-            ax.set_title(
-                rf"$t = {float(t_val):.3f}$",
-                fontsize=16,
-                fontweight="bold"
-            )
-            ax.legend(fontsize=14)
-        
-        plt.tight_layout()
-        plt.savefig(filepath, dpi=300, bbox_inches="tight")
-        plt.show()
-        
-    else:
-        # Single time point - original code
-        plt.figure(figsize=(10, 6))
-        plt.plot(grid, u_true, label="Analytical", color="red", linewidth=5, alpha=0.5)
-        plt.plot(grid, u_num, ":", label="Numerical", color="blue", linewidth=3)
-        plt.grid(alpha=0.3)
-        plt.xticks(fontsize=16)
-        plt.yticks(fontsize=16)
-        plt.xlabel("x", fontsize=16)
-        plt.ylabel("u(x, t)", fontsize=16)
-        plt.title(
-            rf"${dim}D$ Wave Equation, $\Delta x = {dx:.3f}$, $t = {float(t):.3f}$",
-            fontsize=18,
-            fontweight="bold",
-        )
-        plt.legend(fontsize=14)
-        plt.tight_layout()
-        plt.savefig(filepath, dpi=300, bbox_inches="tight")
-        plt.show()
+    colors = ["blue", "green", "orange", "purple"]
+    num_t = len(t)
+
+    fig, axes = plt.subplots(1, num_t, figsize=(6 * num_t, 5))
+    fig.suptitle(
+        rf"$\mathbf{{{dim}D}}$ Wave Equation, $\mathbf{{\Delta x = {dx:.3f}}}$",
+        fontsize=20,
+        fontweight="bold",
+        y=0.98
+    )
+
+    if num_t == 1:
+        axes = [axes]
+
+    for idx, ax in enumerate(axes):
+        grid_t = grid[idx] if isinstance(grid, list) else grid
+        u_true_t = u_true[idx] if isinstance(u_true, list) else u_true
+
+        ax.plot(grid_t, u_true_t, label="Analytical", color="red", linewidth=5, alpha=0.5)
+        for i, scheme in enumerate(u_num):
+            ax.plot(grid_t, scheme["data"][idx], ":", label=scheme["label"],
+                    color=colors[i % len(colors)], linewidth=3)
+
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis='both', labelsize=16)
+        ax.set_xlabel("x", fontsize=16)
+        ax.set_ylabel("u(x, t)", fontsize=16)
+        ax.set_title(rf"$t = {float(t[idx]):.3f}$", fontsize=16, fontweight="bold")
+        ax.legend(fontsize=14)
+
+    plt.tight_layout()
+    plt.savefig(filepath, dpi=300, bbox_inches="tight")
+    plt.show()
 
 
-
-def plot_scheme_error_at_t(
-    grid, 
-    error, 
-    dx, 
-    t, 
-    dim, 
-    title="", 
-    filepath="../figs/error_plot.pdf",
-    log_scale=False
+def plot_error_at_t(
+    *,
+    grid,
+    u_num,
+    u_true,
+    dx,
+    t,
+    dim,
+    filepath,
 ):
-    """
-    Plot error at a fixed time or multiple times, with support for multiple dx values.
-    
-    Parameters:
-    -----------
-    grid : array, list of arrays, or list of dicts
-        Spatial grid points (x coordinates)
-        Can be:
-        - Single array for one dx
-        - List of arrays for multiple t
-        - List of dicts with keys ['grid', 'error', 'dx'] for multiple dx
-    error : array, list of arrays, or None (if using dict format)
-        Error at time t
-    dx : float, list of floats, or None (if using dict format)
-        Spatial step size(s)
-    t : float or list of floats
-        Time point(s) to plot
-    dim : int
-        Spatial dimension
-    title : str
-        Main title for the plot
-    filepath : str
-        Path to save the figure
-    log_scale : bool
-        Whether to use log scale for y-axis
-    """
-    
-    # Check if using dict format for multiple dx values
-    if isinstance(grid, list) and len(grid) > 0 and isinstance(grid[0], dict):
-        # Format: list of dicts with keys ['grid', 'error', 'dx']
-        # This is for plotting multiple dx values in the same plot
-        
-        if isinstance(t, list):
-            # Multiple time points with multiple dx values
-            num_plots = len(t)
-            fig, axes = plt.subplots(1, num_plots, figsize=(6*num_plots, 5))
-            
-            # Add main title (no dx in title since we have multiple)
-            fig.suptitle(
-                rf"{title}",
-                fontsize=20,
-                fontweight="bold",
-                y=0.98
-            )
-            
-            if num_plots == 1:
-                axes = [axes]
-            
-            for idx, ax in enumerate(axes):
-                t_val = t[idx]
-                
-                # Plot each dx value
-                for data_dict in grid:
-                    grid_val = data_dict['grid']
-                    # error can be array (single t) or list (multiple t)
-                    error_val = data_dict['error'][idx] if isinstance(data_dict['error'], list) else data_dict['error']
-                    dx_val = data_dict['dx']
-                    
-                    ax.plot(grid_val, error_val, label=rf"$\Delta x = {dx_val:.3f}$", linewidth=2.5)
-                
-                ax.grid(alpha=0.3)
-                ax.tick_params(axis='both', labelsize=16)
-                ax.set_xlabel("x", fontsize=16)
-                ax.set_ylabel("Error", fontsize=16)
-                ax.set_title(
-                    rf"$t = {float(t_val):.3f}$",
-                    fontsize=16,
-                    fontweight="bold"
-                )
-                if log_scale:
-                    ax.set_yscale('log')
-                ax.legend(fontsize=12)
-            
-            plt.tight_layout()
-            plt.savefig(filepath, dpi=300, bbox_inches="tight")
-            plt.show()
-            
-        else:
-            # Single time point with multiple dx values
-            plt.figure(figsize=(10, 6))
-            
-            for data_dict in grid:
-                grid_val = data_dict['grid']
-                error_val = data_dict['error']
-                dx_val = data_dict['dx']
-                
-                plt.plot(grid_val, error_val, label=rf"$\Delta x = {dx_val:.3f}$", linewidth=2.5)
-            
-            plt.xlabel("x", fontsize=16)
-            plt.ylabel("Error", fontsize=16)
-            plt.title(
-                rf"{title}, $t={float(t):.3f}$",
-                fontsize=18,
-                fontweight="bold",
-            )
-            plt.grid(alpha=0.3)
-            plt.legend(fontsize=14)
-            plt.xticks(fontsize=16)
-            plt.yticks(fontsize=16)
-            if log_scale:
-                plt.yscale('log')
-            plt.tight_layout()
-            plt.savefig(filepath, dpi=300, bbox_inches="tight")
-            plt.show()
-    
-    # Check if t is a list (multiple time points, single dx)
-    elif isinstance(t, list):
-        num_plots = len(t)
-        fig, axes = plt.subplots(1, num_plots, figsize=(6*num_plots, 5))
-        
-        # Add main title
-        fig.suptitle(
-            rf"{title}, $\Delta x = {dx:.3f}$",
-            fontsize=20,
-            fontweight="bold",
-            y=0.98
-        )
-        
-        # Handle single subplot case
-        if num_plots == 1:
-            axes = [axes]
-        
-        for idx, ax in enumerate(axes):
-            # Get error at this time
-            grid_t = grid[idx] if isinstance(grid, list) else grid
-            error_t = error[idx] if isinstance(error, list) else error
-            t_val = t[idx]
-            
-            ax.plot(grid_t, error_t, label="Error", color="purple", linewidth=3)
-            ax.grid(alpha=0.3)
-            ax.tick_params(axis='both', labelsize=16)
-            ax.set_xlabel("x", fontsize=16)
-            ax.set_ylabel("Error", fontsize=16)
-            ax.set_title(
-                rf"$t = {float(t_val):.3f}$",
-                fontsize=16,
-                fontweight="bold"
-            )
-            if log_scale:
-                ax.set_yscale('log')
-            ax.legend(fontsize=14)
-        
-        plt.tight_layout()
-        plt.savefig(filepath, dpi=300, bbox_inches="tight")
-        plt.show()
-        
-    else:
-        # Single time point - original code
-        plt.figure(figsize=(10, 6))
-        plt.plot(grid, error, label="Error", color="purple", linewidth=3)
-        plt.xlabel("x", fontsize=16)
-        plt.ylabel("Error", fontsize=16)
-        plt.title(
-            rf"{title}, $t={float(t):.3f}$, $\Delta x={dx:.3f}$",
-            fontsize=18,
-            fontweight="bold",
-        )
-        plt.grid(alpha=0.3)
-        plt.legend(fontsize=16)
-        plt.xticks(fontsize=16)
-        plt.yticks(fontsize=16)
-        if log_scale:
-            plt.yscale('log')
-        plt.tight_layout()
-        plt.savefig(filepath, dpi=300, bbox_inches="tight")
-        plt.show()
+    colors = ["blue", "green", "orange", "purple"]
+    num_t = len(t)
+
+    fig, axes = plt.subplots(1, num_t, figsize=(6 * num_t, 5))
+    fig.suptitle(
+        rf"$\mathbf{{{dim}D}}$ Wave Equation, $\mathbf{{\Delta x = {dx:.3f}}}$",
+        fontsize=20,
+        fontweight="bold",
+        y=0.98
+    )
+
+    if num_t == 1:
+        axes = [axes]
+
+    for idx, ax in enumerate(axes):
+        grid_t = grid[idx] if isinstance(grid, list) else grid
+        u_true_t = u_true[idx] if isinstance(u_true, list) else u_true
+
+        for i, scheme in enumerate(u_num):
+            err = np.abs(scheme["data"][idx] - u_true_t)
+            ax.plot(grid_t, err, label=f"{scheme['label']}",
+                    color=colors[i % len(colors)], linewidth=2)
+
+        ax.set_yscale("log")
+        ax.grid(alpha=0.3)
+        ax.tick_params(axis='both', labelsize=16)
+        ax.set_xlabel("x", fontsize=16)
+        ax.set_ylabel("Absolute Error", fontsize=16)
+        ax.set_title(rf"$t = {float(t[idx]):.3f}$", fontsize=16, fontweight="bold")
+        ax.legend(fontsize=14)
+
+    plt.tight_layout()
+    plt.savefig(filepath, dpi=300, bbox_inches="tight")
+    plt.show()
+
+
 
 
 # -----------------------------------------------------------------------------
