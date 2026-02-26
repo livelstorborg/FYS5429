@@ -37,22 +37,17 @@ def u_exact(x, t, y=None, c=1.0, dim=1):
 # Grid Creation for FD and FE Schemes
 # -----------------------------------------------------------------------------
 def create_grid(Nx, Ny=None, T=1.0, c=1.0, cfl=0.5, dim=1):
-    """
-    Create spatial + time grid for wave equation in 1D or 2D.
-    """
     if dim == 1:
-        # 1D: CFL condition c*dt/dx ≤ 1
         dx = 1.0 / Nx
         dt = cfl * dx / c
         Nt = int(T / dt)
         
         x = jnp.linspace(0, 1, Nx + 1)
-        t = jnp.linspace(0, T, Nt + 1)
+        t = jnp.arange(0, Nt + 1) * dt  # exact spacing
         
         return x, t, dx, dt
         
     elif dim == 2:
-        # 2D: CFL condition c*dt*sqrt(1/dx² + 1/dy²) ≤ 1
         if Ny is None:
             raise ValueError("Ny must be provided for 2D")
             
@@ -63,7 +58,7 @@ def create_grid(Nx, Ny=None, T=1.0, c=1.0, cfl=0.5, dim=1):
         
         x = jnp.linspace(0, 1, Nx + 1)
         y = jnp.linspace(0, 1, Ny + 1)
-        t = jnp.linspace(0, T, Nt + 1)
+        t = jnp.arange(0, Nt + 1) * dt  # exact spacing
         
         return x, y, t, dx, dy, dt
         
@@ -239,8 +234,8 @@ def _fem_solve_2d(x, t, dx, dt, y, dy, c):
         M_lumped = M_lumped.at[j].set(1.0)
         M_lumped = M_lumped.at[Nx * (Ny + 1) + j].set(1.0)
     
-    kx = 1.0 / dx
-    ky = 1.0 / dy
+    kx = 1.0 / dx**2
+    ky = 1.0 / dy**2
     r = (c * dt) ** 2
     
     u = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
