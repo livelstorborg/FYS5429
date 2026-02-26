@@ -4,13 +4,9 @@ import flax.nnx as nnx
 import optax
 import matplotlib.pyplot as plt
 
-# If you have a separate PDE module, keep this import.
-# Otherwise, you can comment it out and use the u_exact defined below.
-# from .pde import u_exact
-
 
 # -----------------------------------------------------------------------------
-# Exact solutions / ICs (can be replaced by your own in .pde)
+# Exact solutions
 # -----------------------------------------------------------------------------
 def u0_fn_1d(x):
     # u(x,0) = sin(pi x)
@@ -102,7 +98,7 @@ class PINN_HardBC(nnx.Module):
     def __init__(self, layers, activations, key, *, dim=1, u0_fn=None):
         self.network = MLP(layers, activations, key)
         self.dim = dim
-        self.u0_fn = u0_fn  # used for dim=2 additive ansatz (initial displacement)
+        self.u0_fn = u0_fn
 
         if self.dim == 2 and self.u0_fn is None:
             raise ValueError("For dim=2, you must provide u0_fn(x,y).")
@@ -124,7 +120,6 @@ class PINN_HardBC(nnx.Module):
             N = self.network(inp)
             u0 = self.u0_fn(x, y)
 
-            # Additive ansatz (common in time-marching setups)
             return u0 + t * S * N
 
         else:
@@ -192,7 +187,6 @@ def loss_fn(
     c=1.0,
     lambda_ic=10.0,
     dim=1,
-    # 2D extras (for time marching / window IC)
     y_int=None,
     y_ic=None,
     prev_model=None,
@@ -329,7 +323,6 @@ def train_pinn(
     dim=1,
     optimizer="adam",
     grad_clip=1.0,
-    # 2D time-marching extras
     n_windows=5,
     steps_per_window=None,
     u0_fn=None,
@@ -424,7 +417,6 @@ def train_pinn(
             }
             return model, losses, loss_components
 
-        # First-order optimizers (same style as file #1)
         schedule = optax.exponential_decay(
             init_value=lr,
             transition_steps=1000,
@@ -509,7 +501,6 @@ def train_pinn(
     prev_model = None
     histories = []
 
-    # Optimizer for 2D windows (keep same “feel” as file #1, but per-window like file #2)
     tx = optax.chain(
         optax.clip_by_global_norm(grad_clip if grad_clip is not None else 1e9),
         optax.adam(lr),
@@ -579,14 +570,12 @@ def train_pinn(
         histories.append(hist)
         prev_model = nnx.clone(model)
 
-    # Return the same signature as 1D: model, losses, loss_components
-    # For 2D, "losses" will be concatenated loss history across windows.
     all_losses = jnp.array([v for h in histories for v in h["loss"]])
     loss_components = {
         "pde": [v for h in histories for v in h["pde"]],
         "ic_u": [v for h in histories for v in h["ic_u"]],
         "ic_ut": [v for h in histories for v in h["ic_ut"]],
-        "histories": histories,  # keep per-window too
+        "histories": histories,
     }
     return model, all_losses, loss_components
 
@@ -610,11 +599,8 @@ def compute_error_metrics_1d(model, x, t, c=1.0):
 
 
 def compute_error_metrics_2d(model, x, y, t, c=1.0):
-    u_true = u_exact_2d(
-        x[:, None], y[None, :], t=t, c=c
-    )  # broadcast-friendly if needed
+    u_true = u_exact_2d(x[:, None], y[None, :], t=t, c=c)
 
-    # Build predictions across time
     u_pred_list = []
     X, Y = jnp.meshgrid(x, y, indexing="ij")
     XY = jnp.stack([X.ravel(), Y.ravel()], axis=1)
@@ -626,8 +612,6 @@ def compute_error_metrics_2d(model, x, y, t, c=1.0):
         u_pred_list.append(u_pred_t)
     u_pred = jnp.stack(u_pred_list, axis=0)  # (Nt,Nx,Ny)
 
-    # Build u_true with matching shape
-    # u_exact_2d expects arrays shaped like X,Y and scalar t. We'll loop to match u_pred.
     u_true_list = [u_exact_2d(X, Y, ti, c=c) for ti in t]
     u_true = jnp.stack(u_true_list, axis=0)
 
@@ -649,7 +633,7 @@ def error_report_2d_wave(
     Nx=81,
     Ny=81,
     make_snapshot=True,
-    snapshot_metric="relL2",  # "relL2" or "Linf"
+    snapshot_metric="relL2",
     logy=True,
     title_prefix="",
 ):
@@ -783,13 +767,7 @@ def error_report_2d_wave(
     }
 
 
-# -----------------------------------------------------------------------------
-# Example usage
-# -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    # -------------------
-    # Choose dimension here
-    # -------------------
     dim = 1  # set to 1 or 2
 
     c = 1.0
@@ -835,7 +813,6 @@ if __name__ == "__main__":
         plt.tight_layout()
         plt.show()
 
-        # Errors on grid
         x = jnp.linspace(0.0, 1.0, 201)
         t = jnp.linspace(0.0, T_final, 51)
         relL2, Linf, mae, rmse = compute_error_metrics_1d(model, x, t, c=c)
@@ -844,7 +821,6 @@ if __name__ == "__main__":
         )
 
     else:
-        # 2D time-marching settings
         n_windows = 5
         steps_per_window = 4000
 
@@ -852,8 +828,7 @@ if __name__ == "__main__":
             dim=2,
             layers=[3, 64, 64, 64, 1],
             activations=[jax.nn.relu] * 3,
-            steps=n_windows
-            * steps_per_window,  # used only to default steps_per_window if None
+            steps=n_windows * steps_per_window,
             steps_per_window=steps_per_window,
             n_windows=n_windows,
             N_int=2000,
@@ -869,7 +844,6 @@ if __name__ == "__main__":
             v0_fn=v0_fn_2d,
         )
 
-        # Plot losses (flattened across windows)
         plt.figure(figsize=(10, 4))
         plt.subplot(1, 2, 1)
         plt.semilogy(losses)
@@ -890,7 +864,6 @@ if __name__ == "__main__":
         plt.tight_layout()
         plt.show()
 
-        # Error report at window boundaries (like file #2)
         times = jnp.linspace(0.0, T_final, n_windows + 1)
         report = error_report_2d_wave(
             model,
