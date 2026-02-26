@@ -143,98 +143,97 @@ xt_test = jnp.column_stack([X_mesh.ravel(), T_mesh.ravel()])
 u_pinn_vals = u_pinn(xt_test).reshape(X_mesh.shape)
 
 
-# fig_exact = plot_3d_surface(
-#     x,
-#     t,
-#     u_exact,
-#     elev=20,
-#     azim=45,
-#     title="Analytical Solution (1D)",
-#     savefig=False,
-#     show=False,
-# )
+fig_exact = plot_3d_surface(
+    x,
+    t,
+    u_exact,
+    elev=20,
+    azim=45,
+    title="Analytical Solution (1D)",
+    savefig=False,
+    show=False,
+)
 
-# fig_fd = plot_3d_surface(
-#     x,
-#     t,
-#     u_fd,
-#     elev=20,
-#     azim=45,
-#     title="Finite Difference Solution (1D)",
-#     savefig=False,
-#     show=False,
-# )
+fig_fd = plot_3d_surface(
+    x,
+    t,
+    u_fd,
+    elev=20,
+    azim=45,
+    title="Finite Difference Solution (1D)",
+    savefig=False,
+    show=False,
+)
 
-# fig_fem = plot_3d_surface(
-#     x,
-#     t,
-#     u_fem,
-#     elev=20,
-#     azim=45,
-#     title="Finite Element Solution (1D)",
-#     savefig=False,
-#     show=False,
-# )
+fig_fem = plot_3d_surface(
+    x,
+    t,
+    u_fem,
+    elev=20,
+    azim=45,
+    title="Finite Element Solution (1D)",
+    savefig=False,
+    show=False,
+)
 
-# fig_pinn = plot_3d_surface(
-#     x,
-#     t,
-#     u_pinn_vals,
-#     elev=20,
-#     azim=45,
-#     title="PINN Solution (1D)",
-#     savefig=False,
-#     show=False,
-# )
+fig_pinn = plot_3d_surface(
+    x,
+    t,
+    u_pinn_vals,
+    elev=20,
+    azim=45,
+    title="PINN Solution (1D)",
+    savefig=False,
+    show=False,
+)
 
-# subplot_fig = subplot_3d_surfaces(
-#     figures=[
-#         {'x': x, 't': t, 'U': u_exact},
-#         {'x': x, 't': t, 'U': u_fd},
-#         {'x': x, 't': t, 'U': u_fem},
-#         {'x': x, 't': t, 'U': u_pinn_vals},
-#     ],
-#     titles=["Analytical", "Finite Difference", "Finite Element", "PINN (SiLU)"],
-#     elev=20,
-#     azims=[45, 45, 45, 45],
-#     cmap="viridis",
-#     colorbar_label="u(x, t)",
-#     suptitle="Wave Equation Solutions",
-#     savefig=False,
-#     save_path="../figs/analytical_fd_pinn_silu_subplot.pdf",
-#     show=True,
-# )
+subplot_fig = subplot_3d_surfaces(
+    figures=[
+        {'x': x, 't': t, 'U': u_exact},
+        {'x': x, 't': t, 'U': u_fd},
+        {'x': x, 't': t, 'U': u_fem},
+        {'x': x, 't': t, 'U': u_pinn_vals},
+    ],
+    titles=["Analytical", "Finite Difference", "Finite Element", "PINN (SiLU)"],
+    elev=20,
+    azims=[45, 45, 45, 45],
+    cmap="viridis",
+    colorbar_label="u(x, t)",
+    suptitle="Wave Equation Solutions",
+    savefig=False,
+    save_path="../figs/analytical_fd_pinn_silu_subplot.pdf",
+    show=True,
+)
 
-# subplot_error = subplot_3d_surfaces(
-#     figures=[
-#         {'x': x, 't': t, 'U': np.abs(u_fd - u_exact)},
-#         {'x': x, 't': t, 'U': np.abs(u_fem - u_exact)},
-#         {'x': x, 't': t, 'U': np.abs(u_pinn_vals - u_exact)},
-#     ],
-#     titles=["Finite Difference", "Finite Element", "PINN (SiLU)"],
-#     elev=20,
-#     azims=[45, 45, 45],
-#     cmap="viridis",
-#     colorbar_label="u(x, t)",
-#     suptitle="Error",
-#     savefig=False,
-#     save_path="../figs/comparison_subplot.pdf",
-#     show=True,
-# )
+subplot_error = subplot_3d_surfaces(
+    figures=[
+        {'x': x, 't': t, 'U': np.abs(u_fd - u_exact)},
+        {'x': x, 't': t, 'U': np.abs(u_fem - u_exact)},
+        {'x': x, 't': t, 'U': np.abs(u_pinn_vals - u_exact)},
+    ],
+    titles=["Finite Difference", "Finite Element", "PINN (SiLU)"],
+    elev=20,
+    azims=[45, 45, 45],
+    cmap="viridis",
+    colorbar_label="u(x, t)",
+    suptitle="Error",
+    savefig=False,
+    save_path="../figs/comparison_subplot.pdf",
+    show=True,
+)
 
 
-# opt_names = ['adam', 'adamw', 'lbfgs']
-opt_names = ['lbfgs']
+opt_names = ['adam', 'adamw', 'lbfgs']
 
 for opt in opt_names:
     run_architecture_sweep(
-        hidden_widths=[64],
-        num_hidden_layers=[2],
+        hidden_widths=[32, 64, 128],
+        num_hidden_layers=[2, 3, 4],
         activation_fns={
-            # 'tanh': jnn.tanh,
-            # 'sine': jnp.sin,
-            # 'GeLU': jnn.gelu,
-            # 'SiLU': jnn.swish,
+            'tanh': jnn.tanh,
+            'sine': jnp.sin,
+            'GeLU': jnn.gelu,
+            'SiLU': jnn.swish,
             'ReLU': jnn.relu,
         },
         T=1.0,
@@ -253,4 +252,4 @@ for opt in opt_names:
 
 
 # Example usage: Print comparison tables for all optimizers in 1d_constant folder
-print_optimizer_comparison_tables("../data/1d_constant")
+# print_optimizer_comparison_tables("../data/1d_constant")
