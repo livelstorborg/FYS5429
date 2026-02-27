@@ -1,8 +1,10 @@
 import matplotlib.pyplot as plt
 import os
+import jax
 import jax.numpy as jnp
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D
+import flax.nnx as nnx
 
 
 # -----------------------------------------------------------------------------
@@ -461,6 +463,322 @@ def plot_heatmap_width_depth(df, activation, show=True):
 # -----------------------------------------------------------------------------
 # Part d: run all heatmaps
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# PINN error reports
+# -----------------------------------------------------------------------------
+def error_report_1d_wave(
+    model,
+    u_exact_fn,
+    times,
+    *,
+    c=1.0,
+    L=1.0,
+    Nx=201,
+    make_snapshot=True,
+    snapshot_metric="relL2",
+    logy=True,
+    title_prefix="",
+):
+    times = jnp.asarray(times, dtype=float)
+    x = jnp.linspace(0.0, L, Nx)
+
+    @nnx.jit
+    def eval_at_time(t):
+        t = jnp.asarray(t)
+        xt = jnp.stack([x, jnp.full_like(x, t)], axis=1)
+
+        u_pred = model(xt).squeeze()
+        u_true = u_exact_fn(x, jnp.array([t]), c=c)[0]  # (Nx,)
+
+        err = u_pred - u_true
+        relL2 = jnp.sqrt(jnp.mean(err**2)) / (jnp.sqrt(jnp.mean(u_true**2)) + 1e-12)
+        Linf = jnp.max(jnp.abs(err))
+        mae = jnp.mean(jnp.abs(err))
+        rmse = jnp.sqrt(jnp.mean(err**2))
+
+        # H1 semi-norm: error in du/dx
+        def u_pred_scalar(xt_single):
+            return model(xt_single[None]).squeeze()
+
+        dudx_pred = jax.vmap(jax.jacfwd(u_pred_scalar))(xt)[:, 0]  # (Nx,)
+        dudx_true = jnp.gradient(u_true, x)
+        err_dx = dudx_pred - dudx_true
+        h1 = jnp.sqrt(jnp.mean(err**2) + jnp.mean(err_dx**2))
+
+        return relL2, Linf, mae, rmse, h1, u_pred, u_true, err
+
+    relL2_list, Linf_list, mae_list, rmse_list, h1_list = [], [], [], [], []
+    snaps = {}
+
+    for t in times:
+        relL2, Linf, mae, rmse, h1, u_pred, u_true, err = eval_at_time(t)
+        relL2_list.append(float(relL2))
+        Linf_list.append(float(Linf))
+        mae_list.append(float(mae))
+        rmse_list.append(float(rmse))
+        h1_list.append(float(h1))
+
+        if make_snapshot:
+            snaps[float(t)] = {
+                "u_pred": jnp.array(u_pred),
+                "u_true": jnp.array(u_true),
+                "err": jnp.array(err),
+            }
+
+    relL2_arr = jnp.array(relL2_list)
+    Linf_arr = jnp.array(Linf_list)
+    mae_arr = jnp.array(mae_list)
+    rmse_arr = jnp.array(rmse_list)
+    h1_arr = jnp.array(h1_list)
+
+    worst_rel_idx = int(jnp.argmax(relL2_arr))
+    worst_inf_idx = int(jnp.argmax(Linf_arr))
+
+    summary = {
+        "relL2_mean": float(relL2_arr.mean()),
+        "relL2_median": float(jnp.median(relL2_arr)),
+        "relL2_max": float(relL2_arr[worst_rel_idx]),
+        "relL2_max_time": float(times[worst_rel_idx]),
+        "Linf_mean": float(Linf_arr.mean()),
+        "Linf_max": float(Linf_arr[worst_inf_idx]),
+        "Linf_max_time": float(times[worst_inf_idx]),
+        "mae_mean": float(mae_arr.mean()),
+        "rmse_mean": float(rmse_arr.mean()),
+        "h1_mean": float(h1_arr.mean()),
+    }
+
+    plt.figure(figsize=(8, 4.8))
+    plt.plot(times, relL2_arr, marker="o", label="Relative L2")
+    plt.plot(times, Linf_arr, marker="s", label="L∞")
+    plt.plot(times, mae_arr, marker="^", label="MAE")
+    plt.plot(times, rmse_arr, marker="D", label="RMSE")
+    plt.plot(times, h1_arr, marker="v", label="H1")
+    plt.xlabel("Time t")
+    plt.ylabel("Error")
+    ttl = "Error metrics vs time"
+    if title_prefix:
+        ttl = f"{title_prefix} — {ttl}"
+    plt.title(ttl)
+    if logy:
+        plt.yscale("log")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    if make_snapshot and len(snaps) > 0:
+        if snapshot_metric == "Linf":
+            t_snap = float(times[worst_inf_idx])
+            snap_label = "worst L∞"
+        else:
+            t_snap = float(times[worst_rel_idx])
+            snap_label = "worst rel L2"
+
+        plt.figure(figsize=(10, 4))
+        plt.subplot(1, 2, 1)
+        plt.plot(x, snaps[t_snap]["u_true"], label="u_true")
+        plt.plot(x, snaps[t_snap]["u_pred"], "--", label="u_pred")
+        plt.title(f"Solution at t={t_snap:.4f} ({snap_label})")
+        plt.xlabel("x")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+
+        plt.subplot(1, 2, 2)
+        plt.plot(x, jnp.abs(snaps[t_snap]["err"]))
+        plt.title(f"|error| at t={t_snap:.4f}")
+        plt.xlabel("x")
+        plt.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.show()
+
+    print("Accuracy summary:")
+    print(
+        f"  relL2: mean={summary['relL2_mean']:.3e}, median={summary['relL2_median']:.3e}, "
+        f"max={summary['relL2_max']:.3e} at t={summary['relL2_max_time']:.4f}"
+    )
+    print(
+        f"  Linf : mean={summary['Linf_mean']:.3e}, max={summary['Linf_max']:.3e} at t={summary['Linf_max_time']:.4f}"
+    )
+    print(f"  MAE  : mean={summary['mae_mean']:.3e}")
+    print(f"  RMSE : mean={summary['rmse_mean']:.3e}")
+    print(f"  H1   : mean={summary['h1_mean']:.3e}")
+
+    return {
+        "times": times,
+        "relL2": relL2_arr,
+        "Linf": Linf_arr,
+        "mae": mae_arr,
+        "rmse": rmse_arr,
+        "h1": h1_arr,
+        "summary": summary,
+    }
+
+
+def error_report_2d_wave(
+    model,
+    u_exact_fn,
+    times,
+    *,
+    c=1.0,
+    L=1.0,
+    Nx=81,
+    Ny=81,
+    make_snapshot=True,
+    snapshot_metric="relL2",
+    logy=True,
+    title_prefix="",
+):
+    times = jnp.asarray(times, dtype=float)
+
+    x = jnp.linspace(0.0, L, Nx)
+    y = jnp.linspace(0.0, L, Ny)
+    X, Y = jnp.meshgrid(x, y, indexing="ij")
+    XY = jnp.stack([X.ravel(), Y.ravel()], axis=1)
+
+    @nnx.jit
+    def eval_at_time(t):
+        t = jnp.asarray(t)
+        T = jnp.full((XY.shape[0], 1), t)
+        xyt = jnp.concatenate([XY, T], axis=1)
+
+        u_pred = model(xyt).reshape(Nx, Ny)
+        u_true = u_exact_fn(X, Y, t, c=c)
+
+        err = u_pred - u_true
+        relL2 = jnp.sqrt(jnp.mean(err**2)) / (jnp.sqrt(jnp.mean(u_true**2)) + 1e-12)
+        Linf = jnp.max(jnp.abs(err))
+        mae = jnp.mean(jnp.abs(err))
+        rmse = jnp.sqrt(jnp.mean(err**2))
+
+        # H1 semi-norm: error in du/dx and du/dy
+        def u_pred_scalar(xyt_single):
+            return model(xyt_single[None]).squeeze()
+
+        jac = jax.vmap(jax.jacfwd(u_pred_scalar))(xyt)  # (Nx*Ny, 3)
+        dudx_pred = jac[:, 0].reshape(Nx, Ny)
+        dudy_pred = jac[:, 1].reshape(Nx, Ny)
+        dudx_true = jnp.gradient(u_true, x, axis=0)
+        dudy_true = jnp.gradient(u_true, y, axis=1)
+        err_dx = dudx_pred - dudx_true
+        err_dy = dudy_pred - dudy_true
+        h1 = jnp.sqrt(jnp.mean(err**2) + jnp.mean(err_dx**2) + jnp.mean(err_dy**2))
+
+        return relL2, Linf, mae, rmse, h1, u_pred, u_true, err
+
+    relL2_list, Linf_list, mae_list, rmse_list, h1_list = [], [], [], [], []
+    snaps = {}
+
+    for t in times:
+        relL2, Linf, mae, rmse, h1, u_pred, u_true, err = eval_at_time(t)
+        relL2_list.append(float(relL2))
+        Linf_list.append(float(Linf))
+        mae_list.append(float(mae))
+        rmse_list.append(float(rmse))
+        h1_list.append(float(h1))
+
+        if make_snapshot:
+            snaps[float(t)] = {
+                "u_pred": jnp.array(u_pred),
+                "u_true": jnp.array(u_true),
+                "err": jnp.array(err),
+            }
+
+    relL2_arr = jnp.array(relL2_list)
+    Linf_arr = jnp.array(Linf_list)
+    mae_arr = jnp.array(mae_list)
+    rmse_arr = jnp.array(rmse_list)
+    h1_arr = jnp.array(h1_list)
+
+    worst_rel_idx = int(jnp.argmax(relL2_arr))
+    worst_inf_idx = int(jnp.argmax(Linf_arr))
+
+    summary = {
+        "relL2_mean": float(relL2_arr.mean()),
+        "relL2_median": float(jnp.median(relL2_arr)),
+        "relL2_max": float(relL2_arr[worst_rel_idx]),
+        "relL2_max_time": float(times[worst_rel_idx]),
+        "Linf_mean": float(Linf_arr.mean()),
+        "Linf_max": float(Linf_arr[worst_inf_idx]),
+        "Linf_max_time": float(times[worst_inf_idx]),
+        "mae_mean": float(mae_arr.mean()),
+        "rmse_mean": float(rmse_arr.mean()),
+        "h1_mean": float(h1_arr.mean()),
+    }
+
+    plt.figure(figsize=(8, 4.8))
+    plt.plot(times, relL2_arr, marker="o", label="Relative L2")
+    plt.plot(times, Linf_arr, marker="s", label="L∞")
+    plt.plot(times, mae_arr, marker="^", label="MAE")
+    plt.plot(times, rmse_arr, marker="D", label="RMSE")
+    plt.plot(times, h1_arr, marker="v", label="H1")
+    plt.xlabel("Time t")
+    plt.ylabel("Error")
+    ttl = "Error metrics vs time"
+    if title_prefix:
+        ttl = f"{title_prefix} — {ttl}"
+    plt.title(ttl)
+    if logy:
+        plt.yscale("log")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    if make_snapshot and len(snaps) > 0:
+        if snapshot_metric == "Linf":
+            t_snap = float(times[worst_inf_idx])
+            snap_label = "worst L∞"
+        else:
+            t_snap = float(times[worst_rel_idx])
+            snap_label = "worst rel L2"
+
+        err = snaps[t_snap]["err"]
+        abs_err = jnp.abs(err)
+
+        plt.figure(figsize=(15, 4.5))
+
+        plt.subplot(1, 3, 1)
+        plt.imshow(snaps[t_snap]["u_true"], origin="lower", aspect="auto")
+        plt.title(f"u_true at t={t_snap:.4f}")
+        plt.colorbar()
+
+        plt.subplot(1, 3, 2)
+        plt.imshow(snaps[t_snap]["u_pred"], origin="lower", aspect="auto")
+        plt.title(f"u_pred at t={t_snap:.4f}")
+        plt.colorbar()
+
+        plt.subplot(1, 3, 3)
+        plt.imshow(abs_err, origin="lower", aspect="auto")
+        plt.title(f"|error| at t={t_snap:.4f} ({snap_label})")
+        plt.colorbar()
+
+        plt.tight_layout()
+        plt.show()
+
+    print("Accuracy summary:")
+    print(
+        f"  relL2: mean={summary['relL2_mean']:.3e}, median={summary['relL2_median']:.3e}, "
+        f"max={summary['relL2_max']:.3e} at t={summary['relL2_max_time']:.4f}"
+    )
+    print(
+        f"  Linf : mean={summary['Linf_mean']:.3e}, max={summary['Linf_max']:.3e} at t={summary['Linf_max_time']:.4f}"
+    )
+    print(f"  MAE  : mean={summary['mae_mean']:.3e}")
+    print(f"  RMSE : mean={summary['rmse_mean']:.3e}")
+    print(f"  H1   : mean={summary['h1_mean']:.3e}")
+
+    return {
+        "times": times,
+        "relL2": relL2_arr,
+        "Linf": Linf_arr,
+        "mae": mae_arr,
+        "rmse": rmse_arr,
+        "h1": h1_arr,
+        "summary": summary,
+    }
+
+
 def plot_all_heatmaps(df, save_dir="figs", show=False):
     os.makedirs(save_dir, exist_ok=True)
     activations = df["activation"].unique()
