@@ -5,6 +5,28 @@ import jax.numpy as jnp
 # -----------------------------------------------------------------------------
 # Analytical Solutions
 # -----------------------------------------------------------------------------
+def u_exact_1d(x, t, c=1.0):
+    x = jnp.asarray(x)
+    t = jnp.asarray(t)
+    return jnp.sin(jnp.pi * x[None, :]) * jnp.cos(c * jnp.pi * t[:, None])
+
+
+def u0_fn_2d(x, y):
+    # u(x,y,0) = sin(pi x) sin(pi y)
+    return jnp.sin(jnp.pi * x) * jnp.sin(jnp.pi * y)
+
+
+def v0_fn_2d(x, y):
+    # u_t(x,y,0) = 0
+    return jnp.zeros_like(x)
+
+
+def u_exact_2d(x, y, t, c=1.0):
+    # Exact for 2D wave with u0=sin(pi x)sin(pi y), v0=0, BC u=0 on boundary via sine factors
+    omega = c * jnp.pi * jnp.sqrt(2.0)
+    return jnp.sin(jnp.pi * x) * jnp.sin(jnp.pi * y) * jnp.cos(omega * t)
+
+
 def u_exact(x, t, y=None, c=1.0, dim=1):
     """
     Analytical solution for wave equation in 1D or 2D.
