@@ -7,7 +7,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from src.pde import fd_solve, u_exact
-from src.pinn import train_pinn, compute_error_metrics
+from src.pinn import train_pinn
+from src.utils import compute_error_metrics_1d, compute_error_metrics_2d
 
 
 # ---------- Utils (might delete) ----------
