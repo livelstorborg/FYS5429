@@ -31,11 +31,9 @@ t1_eval = 0.25
 t2_eval = 0.5
 t3_eval = T
 
-# ============================================
-#           Constant c = 1.0
-# ============================================
-
-# --------- 1D ---------
+# ========================================================
+#               Error plots at different times
+# ========================================================
 x, t, dx, dt = create_grid(Nx=Nx, T=T, c=c, cfl=cfl, dim=1)
 
 u_fd = fd_solve(x, t, dx, dt, c=c, dim=1)
@@ -99,6 +97,7 @@ fem_t3 = {
 }   
 
 
+# Absolute error plots at t1, t2, t3
 plot_error_at_t(
     grid=x,
     u_num=[
@@ -109,14 +108,16 @@ plot_error_at_t(
     dx=fd_t1["dx"],
     t=[fd_t1["t"], fd_t2["t"], fd_t3["t"]],
     dim=1,
-    filepath="../figs/error_1D.pdf",
+    show=True,
 )
 
 
 
 
 
-# ---------- Solution surfaces ----------
+# ==================================================================
+#               Surface solution plots at different times
+# ==================================================================
 fig_exact = plot_3d_surface(
     x,
     t,
@@ -124,8 +125,6 @@ fig_exact = plot_3d_surface(
     elev=20,
     azim=45,
     title="Analytical Solution (1D)",
-    savefig=True,
-    save_path="../figs/exact_solution_1D.pdf",
 )
 
 fig_fd = plot_3d_surface(
@@ -135,8 +134,6 @@ fig_fd = plot_3d_surface(
     elev=20,
     azim=45,
     title="Finite Difference Solution (1D)",
-    savefig=True,
-    save_path="../figs/fd_solution_1D.pdf",
 )
 
 fig_fem = plot_3d_surface(
@@ -146,8 +143,6 @@ fig_fem = plot_3d_surface(
     elev=20,
     azim=45,
     title="Finite Element Solution (1D)",
-    savefig=True,
-    save_path="../figs/fem_solution_1D.pdf",
 )
 
 subplot_fig = subplot_3d_surfaces(
@@ -162,7 +157,37 @@ subplot_fig = subplot_3d_surfaces(
     cmap="viridis",
     colorbar_label="u(x, t)",
     suptitle="Wave Equation Solutions",
-    savefig=True,
-    save_path="../figs/comparison_subplot.pdf",
     show=True,
+)
+
+
+# ==================================================================
+#               Surface error plots at different times
+# ==================================================================
+
+u_fd_error = np.abs(u_fd - u_ex)
+u_fem_error = np.abs(u_fem - u_ex)
+
+fig_fd_error = plot_3d_surface(
+    x,
+    t,
+    u_fd_error,
+    elev=20,
+    azim=45,
+    title="Finite Difference Error (1D)",
+    show=True,
+    savefig=True,
+    filepath="../figs/fd_error_surface_1d_const.png",
+)
+
+fig_fem_error = plot_3d_surface(
+    x,
+    t,
+    u_fem_error,
+    elev=20,
+    azim=45,
+    title="Finite Element Error (1D)",
+    show=True,
+    savefig=True,
+    filepath="../figs/fem_error_surface_1d_const.png",
 )
