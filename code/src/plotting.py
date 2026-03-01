@@ -64,7 +64,9 @@ def plot_error_at_t(
     dx,
     t,
     dim,
-    filepath,
+    savefig=False,
+    filepath=None,
+    show=False,
 ):
     colors = ["blue", "green", "orange", "purple"]
     num_t = len(t)
@@ -98,8 +100,10 @@ def plot_error_at_t(
         ax.legend(fontsize=14)
 
     plt.tight_layout()
-    plt.savefig(filepath, dpi=300, bbox_inches="tight")
-    plt.show()
+    if savefig and filepath:
+        plt.savefig(filepath, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
 
 
 
@@ -150,7 +154,7 @@ def plot_3d_surface(
     colorbar_label="u(x, t)",
     show=False,
     savefig=False,
-    save_path=None
+    filepath=None,
 ):
     """
     Create a single 3D surface plot.
@@ -177,7 +181,7 @@ def plot_3d_surface(
         Whether to display the plot
     savefig : bool
         Whether to save the figure
-    save_path : str or None
+    filepath : str or None
         Path to save the figure (used if savefig=True)
     
     Returns:
@@ -221,8 +225,8 @@ def plot_3d_surface(
     cbar.update_ticks()
     
     # Save if requested
-    if savefig and save_path:
-        fig.savefig(save_path, dpi=300, bbox_inches="tight", pad_inches=0.1)
+    if savefig and filepath:
+        fig.savefig(filepath, dpi=300, bbox_inches="tight", pad_inches=0.1)
     
     # Show if requested
     if show:
@@ -244,7 +248,7 @@ def subplot_3d_surfaces(
     suptitle="3D Surface Plots",
     show=False,
     savefig=False,
-    save_path=None,
+    filepath=None,
 ):
     """
     Create a row of 3D surface plots from existing figure data.
@@ -339,8 +343,8 @@ def subplot_3d_surfaces(
     fig.suptitle(suptitle, fontsize=22, fontweight="bold", y=0.98)
     
     # Save if requested
-    if savefig and save_path:
-        fig.savefig(save_path, dpi=300, bbox_inches="tight", pad_inches=0.1)
+    if savefig and filepath:
+        fig.savefig(filepath, dpi=300, bbox_inches="tight", pad_inches=0.1)
     
     # Show if requested
     if show:
