@@ -27,9 +27,11 @@ T = 1.0
 c = 1.0
 cfl = 1.0
 
+t0_eval = 0
 t1_eval = 0.25
 t2_eval = 0.5
-t3_eval = T
+t3_eval = 1. / np.sqrt(2) 
+t4_eval = T
 
 
 
