@@ -27,71 +27,48 @@ T = 1.0
 c = 1.0
 cfl = 1.0
 
-t0_eval = 0
+# time points to evaluate
 t1_eval = 0.25
 t2_eval = 0.5
-t3_eval = 1. / np.sqrt(2) 
+t3_eval = 1. / np.sqrt(2)
 t4_eval = T
 
 
 
+x, y, t, dx, dy, dt = create_grid(Nx=Nx, Ny=Ny, T=T, c=c, cfl=cfl, dim=2)
+
+u_fd    = fd_solve(x, t, dx, dt, y=y, dy=dy, c=c, dim=2)
+u_fem   = fem_solve(x, t, dx, dt, y=y, dy=dy, c=c, dim=2)
+u_exact = u_exact(x, t, y=y, c=c, dim=2)
+
+idx_t1 = jnp.argmin(jnp.abs(t - t1_eval))
+idx_t2 = jnp.argmin(jnp.abs(t - t2_eval))
+idx_t3 = jnp.argmin(jnp.abs(t - t3_eval))
+idx_t4 = jnp.argmin(jnp.abs(t - t4_eval))
+
+t_indices = [idx_t1, idx_t2, idx_t3, idx_t4]
+t_labels  = [t1_eval, t2_eval, t3_eval, t4_eval]
 
 
-x2, y2, t2, dx2, dy2, dt2 = create_grid(Nx=10, Ny=10, T=T, c=c, cfl=cfl, dim=2)
 
-u_fd_2d  = fd_solve(x2, t2, dx2, dt2, y=y2, dy=dy2, c=c, dim=2)
-u_fem_2d = fem_solve(x2, t2, dx2, dt2, y=y2, dy=dy2, c=c, dim=2)
-u_ex_2d  = u_exact(x2, t2, y=y2, c=c, dim=2)
+def plot_error_heatmaps_2d(u_scheme, u_exact, t_indices, t_labels, label, savepath):
+    n = len(t_indices)
+    fig, axes = plt.subplots(1, n, figsize=(4 * n, 5), constrained_layout=True)
+    fig.suptitle(rf"$\mathbf{{2D}}$ Wave Equation — Absolute Error ({label})", fontsize=16, fontweight="bold", y=0.92)
 
-idx_t1_2d = jnp.argmin(jnp.abs(t2 - t1_eval))
-idx_t2_2d = jnp.argmin(jnp.abs(t2 - t2_eval))
-idx_t3_2d = jnp.argmin(jnp.abs(t2 - t3_eval))
+    for col, (idx, t_val) in enumerate(zip(t_indices, t_labels)):
+        ax = axes[col]
+        err = np.abs(np.array(u_scheme[idx]) - np.array(u_exact[idx]))
+        im = ax.imshow(err.T, origin="lower", extent=[0, 1, 0, 1],
+                       cmap="viridis", aspect="equal")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.01)
+        ax.set_xlabel("x", fontsize=11)
+        ax.set_ylabel("y", fontsize=11)
+        ax.set_title(rf"$\mathbf{{t={t_val:.2f}}}$", fontsize=11)
 
-t_indices = [idx_t1_2d, idx_t2_2d, idx_t3_2d]
-t_labels  = [t1_eval, t2_eval, t3_eval]
+    plt.savefig(savepath, dpi=300, bbox_inches="tight")
+    plt.show()
 
-# --- Solution heatmaps at each time point ---
-fig, axes = plt.subplots(3, 3, figsize=(15, 12))
-fig.suptitle(r"$\mathbf{2D}$ Wave Equation — Solutions", fontsize=18, fontweight="bold")
 
-for col, (idx, t_val) in enumerate(zip(t_indices, t_labels)):
-    data = [u_ex_2d[idx], u_fd_2d[idx], u_fem_2d[idx]]
-    row_titles = ["Analytical", "FD", "FEM"]
-    vmin = float(jnp.min(u_ex_2d[idx]))
-    vmax = float(jnp.max(u_ex_2d[idx]))
-
-    for row, (U, title) in enumerate(zip(data, row_titles)):
-        ax = axes[row, col]
-        im = ax.imshow(np.array(U).T, origin="lower", extent=[0,1,0,1],
-                       vmin=vmin, vmax=vmax, cmap="viridis", aspect="equal")
-        plt.colorbar(im, ax=ax)
-        ax.set_xlabel("x", fontsize=12)
-        ax.set_ylabel("y", fontsize=12)
-        ax.set_title(rf"{title}, $t={t_val:.2f}$", fontsize=12, fontweight="bold")
-
-plt.tight_layout()
-plt.savefig("../figs/solution_2D.pdf", dpi=300, bbox_inches="tight")
-plt.show()
-
-# --- Error heatmaps at each time point ---
-fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-fig.suptitle(r"$\mathbf{2D}$ Wave Equation — Absolute Error", fontsize=18, fontweight="bold")
-
-for col, (idx, t_val) in enumerate(zip(t_indices, t_labels)):
-    schemes = [
-        (u_fd_2d[idx],  "FD"),
-        (u_fem_2d[idx], "FEM"),
-    ]
-    for row, (U, label) in enumerate(schemes):
-        ax = axes[row, col]
-        err = np.abs(np.array(U) - np.array(u_ex_2d[idx]))
-        im = ax.imshow(err.T, origin="lower", extent=[0,1,0,1],
-                       cmap="plasma", aspect="equal")
-        plt.colorbar(im, ax=ax)
-        ax.set_xlabel("x", fontsize=12)
-        ax.set_ylabel("y", fontsize=12)
-        ax.set_title(rf"|{label} - Analytical|, $t={t_val:.2f}$", fontsize=12, fontweight="bold")
-
-plt.tight_layout()
-plt.savefig("../figs/error_2D.pdf", dpi=300, bbox_inches="tight")
-plt.show()
+plot_error_heatmaps_2d(u_fd,  u_exact, t_indices, t_labels, "FD",  "../figs/fd_error_heatmaps_2d_const.pdf")
+plot_error_heatmaps_2d(u_fem, u_exact, t_indices, t_labels, "FEM", "../figs/fem_error_heatmaps_2d_const.pdf")
