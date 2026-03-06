@@ -40,79 +40,6 @@ u_fd = fd_solve(x, t, dx, dt, c=c, dim=1)
 u_fem = fem_solve(x, t, dx, dt, c=c, dim=1)
 u_ex = u_exact(x, t, c=c, dim=1)
 
-idx_t1 = jnp.argmin(jnp.abs(t - t1_eval))
-idx_t2 = jnp.argmin(jnp.abs(t - t2_eval))
-idx_t3 = jnp.argmin(jnp.abs(t - t3_eval))
-
-fd_t1 = {
-    "grid": x,
-    "u_num": u_fd[idx_t1, :],
-    "u_true": u_ex[idx_t1, :],
-    "dx": dx,
-    "t": float(t[idx_t1]),
-    "dim": 1
-}
-fd_t2 = {
-    "grid": x,
-    "u_num": u_fd[idx_t2, :],
-    "u_true": u_ex[idx_t2, :],
-    "dx": dx,
-    "t": float(t[idx_t2]),
-    "dim": 1
-}
-
-fd_t3 = {
-    "grid": x,
-    "u_num": u_fd[idx_t3, :],
-    "u_true": u_ex[idx_t3, :],
-    "dx": dx,
-    "t": float(t[idx_t3]),
-    "dim": 1
-}
-
-fem_t1 = {
-    "grid": x,
-    "u_num": u_fem[idx_t1, :],
-    "u_true": u_ex[idx_t1, :],
-    "dx": dx,
-    "t": float(t[idx_t1]),
-    "dim": 1
-}
-fem_t2 = {
-    "grid": x,
-    "u_num": u_fem[idx_t2, :],
-    "u_true": u_ex[idx_t2, :],
-    "dx": dx,
-    "t": float(t[idx_t2]),
-    "dim": 1
-}
-
-fem_t3 = {
-    "grid": x,
-    "u_num": u_fem[idx_t3, :],
-    "u_true": u_ex[idx_t3, :],
-    "dx": dx,
-    "t": float(t[idx_t3]),
-    "dim": 1
-}   
-
-
-# Absolute error plots at t1, t2, t3
-plot_error_at_t(
-    grid=x,
-    u_num=[
-        {"data": [fd_t1["u_num"],  fd_t2["u_num"], fd_t3["u_num"]],  "label": "FD"},
-        {"data": [fem_t1["u_num"], fem_t2["u_num"], fem_t3["u_num"]], "label": "FEM"},
-    ],
-    u_true=[fd_t1["u_true"], fd_t2["u_true"], fd_t3["u_true"]],
-    dx=fd_t1["dx"],
-    t=[fd_t1["t"], fd_t2["t"], fd_t3["t"]],
-    dim=1,
-    show=True,
-)
-
-
-
 
 
 # ==================================================================
@@ -177,7 +104,7 @@ fig_fd_error = plot_3d_surface(
     title="Finite Difference Error (1D)",
     show=True,
     savefig=True,
-    filepath="../figs/fd_error_surface_1d_const.png",
+    filepath="../figs/fd_error_surface_1d_const.pdf",
 )
 
 fig_fem_error = plot_3d_surface(
@@ -189,5 +116,5 @@ fig_fem_error = plot_3d_surface(
     title="Finite Element Error (1D)",
     show=True,
     savefig=True,
-    filepath="../figs/fem_error_surface_1d_const.png",
+    filepath="../figs/fem_error_surface_1d_const.pdf",
 )
