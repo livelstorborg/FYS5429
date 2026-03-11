@@ -27,13 +27,7 @@ T = 1.0
 c = 1.0
 cfl = 1.0
 
-t1_eval = 0.25
-t2_eval = 0.5
-t3_eval = T
 
-# ========================================================
-#               Error plots at different times
-# ========================================================
 x, t, dx, dt = create_grid(Nx=Nx, T=T, c=c, cfl=cfl, dim=1)
 
 u_fd = fd_solve(x, t, dx, dt, c=c, dim=1)
@@ -43,7 +37,7 @@ u_ex = u_exact(x, t, c=c, dim=1)
 
 
 # ==================================================================
-#               Surface solution plots at different times
+#                       Surface solution plots
 # ==================================================================
 fig_exact = plot_3d_surface(
     x,
@@ -89,7 +83,7 @@ subplot_fig = subplot_3d_surfaces(
 
 
 # ==================================================================
-#               Surface error plots at different times
+#                         Surface error plots
 # ==================================================================
 
 u_fd_error = np.abs(u_fd - u_ex)
