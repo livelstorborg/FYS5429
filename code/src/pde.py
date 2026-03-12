@@ -57,8 +57,8 @@ def create_grid(Nx, Ny=None, T=1.0, c=1.0, cfl=0.5, dim=1):
         dx = 1.0 / Nx
         dt = cfl * dx / c
         Nt = int(T / dt)
-        x  = jnp.linspace(0, 1, Nx + 1)
-        t  = jnp.arange(0, Nt + 1) * dt
+        x = jnp.linspace(0, 1, Nx + 1)
+        t = jnp.arange(0, Nt + 1) * dt
         return x, t, dx, dt
 
     elif dim == 2:
@@ -68,9 +68,9 @@ def create_grid(Nx, Ny=None, T=1.0, c=1.0, cfl=0.5, dim=1):
         dy = 1.0 / Ny
         dt = cfl * min(dx, dy) / (c * jnp.sqrt(2))
         Nt = int(T / dt)
-        x  = jnp.linspace(0, 1, Nx + 1)
-        y  = jnp.linspace(0, 1, Ny + 1)
-        t  = jnp.arange(0, Nt + 1) * dt
+        x = jnp.linspace(0, 1, Nx + 1)
+        y = jnp.linspace(0, 1, Ny + 1)
+        t = jnp.arange(0, Nt + 1) * dt
         return x, y, t, dx, dy, dt
 
     else:
@@ -94,7 +94,9 @@ def fd_solve(x, t, dx, dt, c=1.0, y=None, dy=None, u0=None, v0=None, f_fn=None, 
     if dim == 1:
         if var:
             if u0 is None:
-                raise ValueError("u0 must be provided for variable-coefficient fd_solve")
+                raise ValueError(
+                    "u0 must be provided for variable-coefficient fd_solve"
+                )
             return _fd_solve_1d_var(x, t, dx, dt, c, u0, v0, f_fn)
         else:
             return _fd_solve_1d_const(x, t, dx, dt, c)
@@ -104,7 +106,9 @@ def fd_solve(x, t, dx, dt, c=1.0, y=None, dy=None, u0=None, v0=None, f_fn=None, 
             raise ValueError("y and dy must be provided for 2D")
         if var:
             if u0 is None:
-                raise ValueError("u0 must be provided for variable-coefficient fd_solve")
+                raise ValueError(
+                    "u0 must be provided for variable-coefficient fd_solve"
+                )
             return _fd_solve_2d_var(x, t, dx, dt, y, dy, c, u0, v0, f_fn)
         else:
             return _fd_solve_2d_const(x, t, dx, dt, y, dy, c)
@@ -116,18 +120,19 @@ def fd_solve(x, t, dx, dt, c=1.0, y=None, dy=None, u0=None, v0=None, f_fn=None, 
 def _fd_solve_1d_const(x, t, dx, dt, c):
     Nx = len(x) - 1
     Nt = len(t) - 1
-    r  = (c * dt / dx) ** 2
+    r = (c * dt / dx) ** 2
 
     u = jnp.zeros((Nt + 1, Nx + 1))
     u = u.at[0, :].set(jnp.sin(jnp.pi * x))
     u = u.at[1, 1:Nx].set(
-        u[0, 1:Nx] + 0.5 * r * (u[0, 2:Nx+1] - 2 * u[0, 1:Nx] + u[0, 0:Nx-1])
+        u[0, 1:Nx] + 0.5 * r * (u[0, 2 : Nx + 1] - 2 * u[0, 1:Nx] + u[0, 0 : Nx - 1])
     )
 
     for n in range(1, Nt):
         u = u.at[n + 1, 1:Nx].set(
-            2 * u[n, 1:Nx] - u[n-1, 1:Nx]
-            + r * (u[n, 2:Nx+1] - 2 * u[n, 1:Nx] + u[n, 0:Nx-1])
+            2 * u[n, 1:Nx]
+            - u[n - 1, 1:Nx]
+            + r * (u[n, 2 : Nx + 1] - 2 * u[n, 1:Nx] + u[n, 0 : Nx - 1])
         )
     return u
 
@@ -140,19 +145,26 @@ def _fd_solve_2d_const(x, t, dx, dt, y, dy, c):
     ry = (c * dt / dy) ** 2
 
     X, Y = jnp.meshgrid(x, y, indexing="ij")
-    u    = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
-    u    = u.at[0, :, :].set(jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y))
-    u    = u.at[1, 1:Nx, 1:Ny].set(
+    u = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
+    u = u.at[0, :, :].set(jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y))
+    u = u.at[1, 1:Nx, 1:Ny].set(
         u[0, 1:Nx, 1:Ny]
-        + 0.5 * rx * (u[0, 2:Nx+1, 1:Ny] - 2 * u[0, 1:Nx, 1:Ny] + u[0, 0:Nx-1, 1:Ny])
-        + 0.5 * ry * (u[0, 1:Nx, 2:Ny+1] - 2 * u[0, 1:Nx, 1:Ny] + u[0, 1:Nx, 0:Ny-1])
+        + 0.5
+        * rx
+        * (u[0, 2 : Nx + 1, 1:Ny] - 2 * u[0, 1:Nx, 1:Ny] + u[0, 0 : Nx - 1, 1:Ny])
+        + 0.5
+        * ry
+        * (u[0, 1:Nx, 2 : Ny + 1] - 2 * u[0, 1:Nx, 1:Ny] + u[0, 1:Nx, 0 : Ny - 1])
     )
 
     for n in range(1, Nt):
         u = u.at[n + 1, 1:Nx, 1:Ny].set(
-            2 * u[n, 1:Nx, 1:Ny] - u[n-1, 1:Nx, 1:Ny]
-            + rx * (u[n, 2:Nx+1, 1:Ny] - 2 * u[n, 1:Nx, 1:Ny] + u[n, 0:Nx-1, 1:Ny])
-            + ry * (u[n, 1:Nx, 2:Ny+1] - 2 * u[n, 1:Nx, 1:Ny] + u[n, 1:Nx, 0:Ny-1])
+            2 * u[n, 1:Nx, 1:Ny]
+            - u[n - 1, 1:Nx, 1:Ny]
+            + rx
+            * (u[n, 2 : Nx + 1, 1:Ny] - 2 * u[n, 1:Nx, 1:Ny] + u[n, 0 : Nx - 1, 1:Ny])
+            + ry
+            * (u[n, 1:Nx, 2 : Ny + 1] - 2 * u[n, 1:Nx, 1:Ny] + u[n, 1:Nx, 0 : Ny - 1])
         )
     return u
 
@@ -163,21 +175,23 @@ def _fd_solve_1d_var(x, t, dx, dt, c_fn, u0, v0, f_fn):
         (c^2_{i+1/2} (u_{i+1}-u_i) - c^2_{i-1/2} (u_i-u_{i-1})) / dx^2
     c evaluated at half-points x_{i+1/2} = x_i + dx/2.
     """
-    Nx     = len(x) - 1
-    Nt     = len(t) - 1
+    Nx = len(x) - 1
+    Nt = len(t) - 1
     x_half = x[:-1] + 0.5 * dx  # shape (Nx,)
 
     u = jnp.zeros((Nt + 1, Nx + 1))
     u = u.at[0].set(u0)
 
     def _lap(u_vec, tn):
-        c_r = c_fn(x_half[1:Nx],   tn)
-        c_l = c_fn(x_half[0:Nx-1], tn)
-        return (c_r**2 * (u_vec[2:Nx+1] - u_vec[1:Nx])
-                - c_l**2 * (u_vec[1:Nx] - u_vec[0:Nx-1])) / dx**2
+        c_r = c_fn(x_half[1:Nx], tn)
+        c_l = c_fn(x_half[0 : Nx - 1], tn)
+        return (
+            c_r**2 * (u_vec[2 : Nx + 1] - u_vec[1:Nx])
+            - c_l**2 * (u_vec[1:Nx] - u_vec[0 : Nx - 1])
+        ) / dx**2
 
     lap0 = _lap(u[0], t[0])
-    f0   = f_fn(x[1:Nx], t[0]) if f_fn is not None else jnp.zeros(Nx - 1)
+    f0 = f_fn(x[1:Nx], t[0]) if f_fn is not None else jnp.zeros(Nx - 1)
 
     if v0 is None:
         u1 = u[0, 1:Nx] + 0.5 * dt**2 * (lap0 + f0)
@@ -187,15 +201,62 @@ def _fd_solve_1d_var(x, t, dx, dt, c_fn, u0, v0, f_fn):
 
     for n in range(1, Nt):
         lap = _lap(u[n], t[n])
-        fn  = f_fn(x[1:Nx], t[n]) if f_fn is not None else jnp.zeros(Nx - 1)
-        u   = u.at[n + 1, 1:Nx].set(
-            2 * u[n, 1:Nx] - u[n-1, 1:Nx] + dt**2 * (lap + fn)
-        )
+        fn = f_fn(x[1:Nx], t[n]) if f_fn is not None else jnp.zeros(Nx - 1)
+        u = u.at[n + 1, 1:Nx].set(2 * u[n, 1:Nx] - u[n - 1, 1:Nx] + dt**2 * (lap + fn))
     return u
 
 
 def _fd_solve_2d_var(x, t, dx, dt, y, dy, c_fn, u0, v0, f_fn):
-    raise NotImplementedError("2D variable-coefficient FD solver not yet implemented")
+    """
+    Conservative FD stencil for 2D variable c(x,y,t):
+        c^2 evaluated at face midpoints (x_{i±1/2}, y_j) and (x_i, y_{j±1/2}).
+    """
+    Nx = len(x) - 1
+    Ny = len(y) - 1
+    Nt = len(t) - 1
+
+    x_half = x[:-1] + 0.5 * dx  # shape (Nx,)
+    y_half = y[:-1] + 0.5 * dy  # shape (Ny,)
+
+    # Precompute face-midpoint grids for interior nodes (shape (Nx-1, Ny-1) each)
+    Xr, Yr = jnp.meshgrid(x_half[1:Nx], y[1:Ny], indexing="ij")
+    Xl, Yl = jnp.meshgrid(x_half[0:Nx - 1], y[1:Ny], indexing="ij")
+    Xu, Yu = jnp.meshgrid(x[1:Nx], y_half[1:Ny], indexing="ij")
+    Xd, Yd = jnp.meshgrid(x[1:Nx], y_half[0:Ny - 1], indexing="ij")
+    Xn, Yn = jnp.meshgrid(x[1:Nx], y[1:Ny], indexing="ij")
+
+    u = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
+    u = u.at[0].set(u0)
+
+    def _lap(u_slice, tn):
+        c2_r = c_fn(Xr, Yr, tn) ** 2
+        c2_l = c_fn(Xl, Yl, tn) ** 2
+        c2_u = c_fn(Xu, Yu, tn) ** 2
+        c2_d = c_fn(Xd, Yd, tn) ** 2
+        return (
+            c2_r * (u_slice[2 : Nx + 1, 1:Ny] - u_slice[1:Nx, 1:Ny])
+            - c2_l * (u_slice[1:Nx, 1:Ny] - u_slice[0 : Nx - 1, 1:Ny])
+        ) / dx**2 + (
+            c2_u * (u_slice[1:Nx, 2 : Ny + 1] - u_slice[1:Nx, 1:Ny])
+            - c2_d * (u_slice[1:Nx, 1:Ny] - u_slice[1:Nx, 0 : Ny - 1])
+        ) / dy**2
+
+    lap0 = _lap(u[0], t[0])
+    f0 = f_fn(Xn, Yn, t[0]) if f_fn is not None else jnp.zeros((Nx - 1, Ny - 1))
+
+    if v0 is None:
+        u1 = u[0, 1:Nx, 1:Ny] + 0.5 * dt**2 * (lap0 + f0)
+    else:
+        u1 = u[0, 1:Nx, 1:Ny] + dt * v0[1:Nx, 1:Ny] + 0.5 * dt**2 * (lap0 + f0)
+    u = u.at[1, 1:Nx, 1:Ny].set(u1)
+
+    for n in range(1, Nt):
+        lap = _lap(u[n], t[n])
+        fn = f_fn(Xn, Yn, t[n]) if f_fn is not None else jnp.zeros((Nx - 1, Ny - 1))
+        u = u.at[n + 1, 1:Nx, 1:Ny].set(
+            2 * u[n, 1:Nx, 1:Ny] - u[n - 1, 1:Nx, 1:Ny] + dt**2 * (lap + fn)
+        )
+    return u
 
 
 # -----------------------------------------------------------------------------
@@ -215,7 +276,9 @@ def fem_solve(x, t, dx, dt, c=1.0, y=None, dy=None, u0=None, v0=None, f_fn=None,
     if dim == 1:
         if var:
             if u0 is None:
-                raise ValueError("u0 must be provided for variable-coefficient fem_solve")
+                raise ValueError(
+                    "u0 must be provided for variable-coefficient fem_solve"
+                )
             return _fem_solve_1d_var(x, t, dx, dt, c, u0, v0, f_fn)
         else:
             return _fem_solve_1d_const(x, t, dx, dt, c)
@@ -225,10 +288,12 @@ def fem_solve(x, t, dx, dt, c=1.0, y=None, dy=None, u0=None, v0=None, f_fn=None,
             raise ValueError("y and dy must be provided for 2D")
         if var:
             if u0 is None:
-                raise ValueError("u0 must be provided for variable-coefficient fem_solve")
+                raise ValueError(
+                    "u0 must be provided for variable-coefficient fem_solve"
+                )
             return _fem_solve_2d_var(x, t, dx, dt, y, dy, c, u0, v0, f_fn)
         else:
-            return _fem_solve_2d_const(x, t, dx, dt, y, dy, c)
+            return _fem_solve_2d_const(x, t, dx, dt, y, dy, c, u0)
 
     else:
         raise ValueError(f"dim must be 1 or 2, got {dim}")
@@ -239,11 +304,11 @@ def _fem_solve_1d_const(x, t, dx, dt, c):
     Nt = len(t) - 1
 
     K_diag = jnp.ones(Nx + 1) * (2.0 / dx)
-    K_off  = jnp.ones(Nx) * (-1.0 / dx)
+    K_off = jnp.ones(Nx) * (-1.0 / dx)
     K_diag = K_diag.at[0].set(1.0)
     K_diag = K_diag.at[Nx].set(1.0)
-    K_off  = K_off.at[0].set(0.0)
-    K_off  = K_off.at[-1].set(0.0)
+    K_off = K_off.at[0].set(0.0)
+    K_off = K_off.at[-1].set(0.0)
 
     M_lumped = jnp.ones(Nx + 1) * dx
     M_lumped = M_lumped.at[0].set(1.0)
@@ -251,11 +316,11 @@ def _fem_solve_1d_const(x, t, dx, dt, c):
 
     coeff = (c * dt) ** 2 / M_lumped
 
-    u   = jnp.zeros((Nt + 1, Nx + 1))
-    u   = u.at[0, :].set(jnp.sin(jnp.pi * x))
+    u = jnp.zeros((Nt + 1, Nx + 1))
+    u = u.at[0, :].set(jnp.sin(jnp.pi * x))
     u_1 = jnp.zeros(Nx + 1)
     for i in range(1, Nx):
-        st  = K_diag[i] * u[0, i] + K_off[i-1] * u[0, i-1] + K_off[i] * u[0, i+1]
+        st = K_diag[i] * u[0, i] + K_off[i - 1] * u[0, i - 1] + K_off[i] * u[0, i + 1]
         u_1 = u_1.at[i].set(u[0, i] - 0.5 * coeff[i] * st)
     u = u.at[1, :].set(u_1)
     u = u.at[1, 0].set(0.0)
@@ -264,44 +329,113 @@ def _fem_solve_1d_const(x, t, dx, dt, c):
     for n in range(1, Nt):
         u_new = jnp.zeros(Nx + 1)
         for i in range(1, Nx):
-            st    = K_diag[i] * u[n, i] + K_off[i-1] * u[n, i-1] + K_off[i] * u[n, i+1]
-            u_new = u_new.at[i].set(2 * u[n, i] - u[n-1, i] - coeff[i] * st)
+            st = (
+                K_diag[i] * u[n, i]
+                + K_off[i - 1] * u[n, i - 1]
+                + K_off[i] * u[n, i + 1]
+            )
+            u_new = u_new.at[i].set(2 * u[n, i] - u[n - 1, i] - coeff[i] * st)
         u = u.at[n + 1, :].set(u_new)
         u = u.at[n + 1, 0].set(0.0)
         u = u.at[n + 1, Nx].set(0.0)
     return u
 
 
-def _fem_solve_2d_const(x, t, dx, dt, y, dy, c):
+def _fem_solve_2d_const(
+    x,
+    t,
+    dx,
+    dt,
+    y,
+    dy,
+    c,
+    u0,
+    v0=None,
+    f_fn=None,
+):
+    """
+    Explicit mass-lumped FEM solver for 2D wave equation
+        u_tt = c^2 Δu + f
+
+    Parameters
+    ----------
+    x, y : spatial grids
+    t    : time grid
+    c    : constant wave speed
+    u0   : initial displacement (Nx+1, Ny+1)
+    v0   : initial velocity (optional)
+    f_fn : forcing function f(x,y,t)
+    """
+
     Nx = len(x) - 1
     Ny = len(y) - 1
     Nt = len(t) - 1
-    rx = (c * dt / dx) ** 2
-    ry = (c * dt / dy) ** 2
+    if u0 is None:
+        X, Y = jnp.meshgrid(x, y, indexing="ij")
+        u0 = jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
+    # --------------------------------------------------
+    # Lumped mass (Q1 elements on uniform grid)
+    # interior node mass = dx*dy
+    # --------------------------------------------------
+    M_inv = 1.0 / (dx * dy)
 
-    X, Y = jnp.meshgrid(x, y, indexing="ij")
-    u0_  = jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
-    u    = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
-    u    = u.at[0].set(u0_)
+    # --------------------------------------------------
+    # Storage
+    # --------------------------------------------------
+    u = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
+    u = u.at[0].set(u0)
 
-    lap0 = (
-        (u0_[2:Nx+1, 1:Ny] - 2 * u0_[1:Nx, 1:Ny] + u0_[0:Nx-1, 1:Ny]) / dx**2
-      + (u0_[1:Nx, 2:Ny+1] - 2 * u0_[1:Nx, 1:Ny] + u0_[1:Nx, 0:Ny-1]) / dy**2
-    )
-    u1 = jnp.zeros((Nx + 1, Ny + 1))
-    u1 = u1.at[1:Nx, 1:Ny].set(u0_[1:Nx, 1:Ny] + 0.5 * (c * dt)**2 * lap0)
-    u  = u.at[1].set(u1)
+    # --------------------------------------------------
+    # FEM stiffness action (Ku)
+    # equivalent to assembled stiffness matrix action
+    # --------------------------------------------------
+    def stiffness(u_slice):
+        lap = (
+            u_slice[2 : Nx + 1, 1:Ny]
+            - 2 * u_slice[1:Nx, 1:Ny]
+            + u_slice[0 : Nx - 1, 1:Ny]
+        ) / dx**2 + (
+            u_slice[1:Nx, 2 : Ny + 1]
+            - 2 * u_slice[1:Nx, 1:Ny]
+            + u_slice[1:Nx, 0 : Ny - 1]
+        ) / dy**2
+        return lap
 
+    # --------------------------------------------------
+    # First step (Taylor expansion)
+    # --------------------------------------------------
+    rhs0 = c**2 * stiffness(u[0])
+
+    if f_fn is not None:
+        X, Y = jnp.meshgrid(x[1:Nx], y[1:Ny], indexing="ij")
+        rhs0 = rhs0 + f_fn(X, Y, t[0])
+
+    if v0 is None:
+        u1 = u[0, 1:Nx, 1:Ny] + 0.5 * dt**2 * rhs0
+    else:
+        u1 = u[0, 1:Nx, 1:Ny] + dt * v0[1:Nx, 1:Ny] + 0.5 * dt**2 * rhs0
+
+    u = u.at[1, 1:Nx, 1:Ny].set(u1)
+
+    # --------------------------------------------------
+    # Time stepping
+    # --------------------------------------------------
     for n in range(1, Nt):
-        lap_n = (
-            (u[n, 2:Nx+1, 1:Ny] - 2 * u[n, 1:Nx, 1:Ny] + u[n, 0:Nx-1, 1:Ny]) / dx**2
-          + (u[n, 1:Nx, 2:Ny+1] - 2 * u[n, 1:Nx, 1:Ny] + u[n, 1:Nx, 0:Ny-1]) / dy**2
-        )
-        u_new = jnp.zeros((Nx + 1, Ny + 1))
-        u_new = u_new.at[1:Nx, 1:Ny].set(
-            2 * u[n, 1:Nx, 1:Ny] - u[n-1, 1:Nx, 1:Ny] + (c * dt)**2 * lap_n
-        )
-        u = u.at[n + 1].set(u_new)
+        rhs = c**2 * stiffness(u[n])
+
+        if f_fn is not None:
+            rhs = rhs + f_fn(X, Y, t[n])
+
+        u_next = 2 * u[n, 1:Nx, 1:Ny] - u[n - 1, 1:Nx, 1:Ny] + dt**2 * rhs
+
+        u = u.at[n + 1, 1:Nx, 1:Ny].set(u_next)
+
+        # Dirichlet BCs (zero)
+        u = u.at[n + 1, 0, :].set(0.0)
+        u = u.at[n + 1, Nx, :].set(0.0)
+        u = u.at[n + 1, :, 0].set(0.0)
+        u = u.at[n + 1, :, Ny].set(0.0)
+
     return u
 
 
@@ -310,8 +444,8 @@ def _fem_solve_1d_var(x, t, dx, dt, c_fn, u0, v0, f_fn):
     Lumped-mass FEM with c at element midpoints.
     Note: algebraically identical to _fd_solve_1d_var for uniform grids.
     """
-    Nx    = len(x) - 1
-    Nt    = len(t) - 1
+    Nx = len(x) - 1
+    Nt = len(t) - 1
     x_mid = x[:-1] + 0.5 * dx  # shape (Nx,)
 
     u = jnp.zeros((Nt + 1, Nx + 1))
@@ -319,12 +453,14 @@ def _fem_solve_1d_var(x, t, dx, dt, c_fn, u0, v0, f_fn):
 
     def _stiffness_rhs(u_vec, tn):
         c2 = c_fn(x_mid, tn) ** 2
-        Ku = (c2[1:Nx]   * (u_vec[1:Nx] - u_vec[2:Nx+1])
-              + c2[0:Nx-1] * (u_vec[1:Nx] - u_vec[0:Nx-1])) / dx
+        Ku = (
+            c2[1:Nx] * (u_vec[1:Nx] - u_vec[2 : Nx + 1])
+            + c2[0 : Nx - 1] * (u_vec[1:Nx] - u_vec[0 : Nx - 1])
+        ) / dx
         return -Ku / dx  # divide by lumped mass M_i = dx
 
     rhs0 = _stiffness_rhs(u[0], t[0])
-    f0   = f_fn(x[1:Nx], t[0]) if f_fn is not None else jnp.zeros(Nx - 1)
+    f0 = f_fn(x[1:Nx], t[0]) if f_fn is not None else jnp.zeros(Nx - 1)
 
     if v0 is None:
         u1 = u[0, 1:Nx] + 0.5 * dt**2 * (rhs0 + f0)
@@ -334,12 +470,70 @@ def _fem_solve_1d_var(x, t, dx, dt, c_fn, u0, v0, f_fn):
 
     for n in range(1, Nt):
         rhs = _stiffness_rhs(u[n], t[n])
-        fn  = f_fn(x[1:Nx], t[n]) if f_fn is not None else jnp.zeros(Nx - 1)
-        u   = u.at[n + 1, 1:Nx].set(
-            2 * u[n, 1:Nx] - u[n-1, 1:Nx] + dt**2 * (rhs + fn)
-        )
+        fn = f_fn(x[1:Nx], t[n]) if f_fn is not None else jnp.zeros(Nx - 1)
+        u = u.at[n + 1, 1:Nx].set(2 * u[n, 1:Nx] - u[n - 1, 1:Nx] + dt**2 * (rhs + fn))
     return u
 
 
 def _fem_solve_2d_var(x, t, dx, dt, y, dy, c_fn, u0, v0, f_fn):
-    raise NotImplementedError("2D variable-coefficient FEM solver not yet implemented")
+    """
+    Explicit mass-lumped FEM solver for
+
+        u_tt = div(c(x,y,t)^2 grad u) + f
+
+    using Q1 elements on a structured grid.
+    c^2 evaluated at face midpoints (equivalent to conservative FD with lumped mass).
+    """
+    Nx = len(x) - 1
+    Ny = len(y) - 1
+    Nt = len(t) - 1
+
+    x_half = x[:-1] + 0.5 * dx  # shape (Nx,)
+    y_half = y[:-1] + 0.5 * dy  # shape (Ny,)
+
+    # Precompute face-midpoint grids for interior nodes (shape (Nx-1, Ny-1) each)
+    Xr, Yr = jnp.meshgrid(x_half[1:Nx], y[1:Ny], indexing="ij")
+    Xl, Yl = jnp.meshgrid(x_half[0:Nx - 1], y[1:Ny], indexing="ij")
+    Xu, Yu = jnp.meshgrid(x[1:Nx], y_half[1:Ny], indexing="ij")
+    Xd, Yd = jnp.meshgrid(x[1:Nx], y_half[0:Ny - 1], indexing="ij")
+    Xn, Yn = jnp.meshgrid(x[1:Nx], y[1:Ny], indexing="ij")
+
+    u = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
+    u = u.at[0].set(u0)
+
+    def stiffness_rhs(u_slice, tn):
+        c2_r = c_fn(Xr, Yr, tn) ** 2
+        c2_l = c_fn(Xl, Yl, tn) ** 2
+        c2_u = c_fn(Xu, Yu, tn) ** 2
+        c2_d = c_fn(Xd, Yd, tn) ** 2
+        return (
+            c2_r * (u_slice[2 : Nx + 1, 1:Ny] - u_slice[1:Nx, 1:Ny])
+            - c2_l * (u_slice[1:Nx, 1:Ny] - u_slice[0 : Nx - 1, 1:Ny])
+        ) / dx**2 + (
+            c2_u * (u_slice[1:Nx, 2 : Ny + 1] - u_slice[1:Nx, 1:Ny])
+            - c2_d * (u_slice[1:Nx, 1:Ny] - u_slice[1:Nx, 0 : Ny - 1])
+        ) / dy**2
+
+    rhs0 = stiffness_rhs(u[0], t[0])
+    f0 = f_fn(Xn, Yn, t[0]) if f_fn is not None else jnp.zeros((Nx - 1, Ny - 1))
+
+    if v0 is None:
+        u1 = u[0, 1:Nx, 1:Ny] + 0.5 * dt**2 * (rhs0 + f0)
+    else:
+        u1 = u[0, 1:Nx, 1:Ny] + dt * v0[1:Nx, 1:Ny] + 0.5 * dt**2 * (rhs0 + f0)
+    u = u.at[1, 1:Nx, 1:Ny].set(u1)
+
+    for n in range(1, Nt):
+        rhs = stiffness_rhs(u[n], t[n])
+        if f_fn is not None:
+            rhs = rhs + f_fn(Xn, Yn, t[n])
+
+        u = u.at[n + 1, 1:Nx, 1:Ny].set(
+            2 * u[n, 1:Nx, 1:Ny] - u[n - 1, 1:Nx, 1:Ny] + dt**2 * rhs
+        )
+        u = u.at[n + 1, 0, :].set(0.0)
+        u = u.at[n + 1, Nx, :].set(0.0)
+        u = u.at[n + 1, :, 0].set(0.0)
+        u = u.at[n + 1, :, Ny].set(0.0)
+
+    return u
