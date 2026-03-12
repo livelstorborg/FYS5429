@@ -1,8 +1,10 @@
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import jax
+
 jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
@@ -33,7 +35,6 @@ x, t, dx, dt = create_grid(Nx=Nx, T=T, c=c, cfl=cfl, dim=1)
 u_fd = fd_solve(x, t, dx, dt, c=c, dim=1)
 u_fem = fem_solve(x, t, dx, dt, c=c, dim=1)
 u_ex = u_exact(x, t, c=c, dim=1)
-
 
 
 # ==================================================================
@@ -68,9 +69,9 @@ fig_fem = plot_3d_surface(
 
 subplot_fig = subplot_3d_surfaces(
     figures=[
-        {'x': x, 't': t, 'U': u_ex},
-        {'x': x, 't': t, 'U': u_fd},
-        {'x': x, 't': t, 'U': u_fem},
+        {"x": x, "t": t, "U": u_ex},
+        {"x": x, "t": t, "U": u_fd},
+        {"x": x, "t": t, "U": u_fem},
     ],
     titles=["Analytical", "Finite Difference", "Finite Element"],
     elev=20,
@@ -98,7 +99,7 @@ fig_fd_error = plot_3d_surface(
     title="Finite Difference Error (1D)",
     show=True,
     savefig=True,
-    filepath="../figs/fd_error_surface_1d_const.pdf",
+    filepath="figs/fd_error_surface_1d_const.pdf",
 )
 
 fig_fem_error = plot_3d_surface(
@@ -110,5 +111,5 @@ fig_fem_error = plot_3d_surface(
     title="Finite Element Error (1D)",
     show=True,
     savefig=True,
-    filepath="../figs/fem_error_surface_1d_const.pdf",
+    filepath="figs/fem_error_surface_1d_const.pdf",
 )
