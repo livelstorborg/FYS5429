@@ -27,11 +27,11 @@ from src.plotting import (
 # c_fn(x,t) = c0 / n(x,t)  (effective wave speed)
 # ── Parameters — fixed across 1D, 2D, FD, FEM, PINN ──────────────
 c0 = 1.0
-eps = 0.1  # particle size ε << 1
+eps = 0.2  # particle size ε << 1
 delta = 0.004  # interface width δ << ε
-Omega = 2 * np.pi * 2.0  # modulation frequency Ω
+Omega = 2 * np.pi * 4.0  # modulation frequency Ω
 s = lambda t: eps**2 * jnp.sin(Omega * t)  # critical scaling
-z_particles = [0.25, 0.50, 0.75]  # centres z_i
+z_particles = [0.5]  # single particle at centre
 
 
 def _smooth_indicator(x, z_i):
@@ -48,7 +48,7 @@ def c_fn(x_arr, t_scalar):
     return c0 / jnp.sqrt(n_sq(x_arr, t_scalar))
 
 
-c_max = c0  # max c_eff = c0/min(n) = c0 outside particles where n=1
+c_max = c0 / jnp.sqrt(0.1)  # max c_eff when n² hits the clamp (= 0.1)
 
 # Parameters
 Nx = 500
