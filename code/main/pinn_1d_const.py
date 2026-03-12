@@ -225,7 +225,7 @@ subplot_error = subplot_3d_surfaces(
     colorbar_label="u(x, t)",
     suptitle="Error",
     savefig=False,
-    save_path="figs/comparison_subplot.pdf",
+    filepath="figs/comparison_subplot.pdf",
     show=True,
 )
 
@@ -234,14 +234,14 @@ opt_names = ["adam", "adamw", "lbfgs"]
 
 for opt in opt_names:
     run_architecture_sweep(
-        hidden_widths=[32, 64, 128],
-        num_hidden_layers=[2, 3, 4],
+        hidden_widths=[32, 64],
+        num_hidden_layers=[2, 3],
         activation_fns={
             "tanh": jnn.tanh,
-            "sine": jnp.sin,
-            "GeLU": jnn.gelu,
-            "SiLU": jnn.swish,
-            "ReLU": jnn.relu,
+            # "sine": jnp.sin,
+            # "GeLU": jnn.gelu,
+            # "SiLU": jnn.swish,
+            # "ReLU": jnn.relu,
         },
         T=1.0,
         steps=1000,
