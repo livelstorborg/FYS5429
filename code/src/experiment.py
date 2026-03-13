@@ -15,12 +15,9 @@ from src.utils import compute_error_metrics_1d, compute_error_metrics_2d
 def absolute_error(u_num, u_true):
     return np.abs(u_num - u_true)
 
+
 def relative_error(u_num, u_true, eps=1e-8):
     return np.abs(u_num - u_true) / (np.abs(u_true) + eps)
-
-
-
-
 
 
 # ---------- Width/depth sweep ----------
@@ -45,7 +42,7 @@ def run_architecture_sweep(
     Nx_eval=100,
     Ny_eval=None,
     Nt_eval=100,
-    optimizer='adam',
+    optimizer="adam",
     save_to_csv=False,
     use_pre_computed=False,
     data_dir="data",
@@ -59,7 +56,7 @@ def run_architecture_sweep(
     Optional keyword arguments allow further control.
     If use_pre_computed=True, loads results from existing CSV files.
     If save_to_csv=True (and use_pre_computed=False), saves individual
-    seed results to CSV files (one per architecture: activation_L{layers}_N{width}.csv) 
+    seed results to CSV files (one per architecture: activation_L{layers}_N{width}.csv)
     in data_dir.
 
     Returns:
@@ -170,17 +167,9 @@ def run_architecture_sweep(
     return results_df
 
 
-
-
-
-
 # ---------- Learningrate sweep ----------
 def run_learning_rate_sweep():
     pass
-
-
-
-
 
 
 def load_sweep_results_from_csv(data_dir="../data", activation_fns=None):

@@ -26,7 +26,7 @@ from src.plotting import (
 
 
 # =============================================================
-#            Full archecture sweep for all optimizers, 
+#            Full archecture sweep for all optimizers,
 #            activation functinos, widths and depths
 # =============================================================
 opt_names = ["adam", "adamw", "lbfgs"]
