@@ -173,7 +173,7 @@ Experiment for testing, using windows=1 for the simple 1d constant case
 #     suptitle="Wave Equation Solutions — 1D PINN",
 #     show=True,
 #     savefig=True,
-#     filepath=str(Path(__file__).parent.parent / "figs" / "1d_const" / "solution_surface_pinn_1d.pdf"),
+#     filepath=str(Path(__file__).parent.parent / "figs" / "1d_const" / "heatmaps_1d_const" /"solution_surface_pinn_1d.pdf"),
 # )
 
 
