@@ -31,8 +31,16 @@ def run_architecture_sweep(
     *,
     T=0.5,
     steps=5000,
+    n_windows=5,
+    steps_per_window=None,
     N_int=1000,
+    N_ic=100,
+    lambda_ic=10.0,
     lr=1e-3,
+    grad_clip=1.0,
+    dim=1,
+    norm="L2",
+    lambda_sob=1.0,
     seeds=(0,),
     Nx_eval=100,
     Ny_eval=None,
@@ -91,29 +99,29 @@ def run_architecture_sweep(
                         layers=layers,
                         activations=activations,
                         steps=steps,
+                        n_windows=n_windows,
+                        steps_per_window=steps_per_window,
                         N_int=N_int,
+                        N_ic=N_ic,
+                        lambda_ic=lambda_ic,
                         T=T,
                         lr=lr,
+                        grad_clip=grad_clip,
+                        dim=dim,
+                        norm=norm,
+                        lambda_sob=lambda_sob,
                         seed=seed,
                         optimizer=optimizer,
                     )
 
-                    # Create evaluation grids
                     x_eval = jnp.linspace(0, 1, Nx_eval)
                     t_eval = jnp.linspace(0, T, Nt_eval)
-                    y_eval = jnp.linspace(0, 1, Ny_eval) if Ny_eval else None
-                    
-                    # Determine dimension (1D or 2D only)
-                    dim_eval = 2 if Ny_eval else 1
 
-                    L2, Linf = compute_error_metrics(
-                        model,
-                        x=x_eval,
-                        y=y_eval,
-                        z=None,
-                        t=t_eval,
-                        dim=dim_eval,
-                    )
+                    if dim == 1:
+                        L2, Linf, _, _, _ = compute_error_metrics_1d(model, x=x_eval, t=t_eval)
+                    else:
+                        y_eval = jnp.linspace(0, 1, Ny_eval) if Ny_eval else jnp.linspace(0, 1, Nx_eval)
+                        L2, Linf, _, _, _ = compute_error_metrics_2d(model, x=x_eval, y=y_eval, t=t_eval)
                     L2_all.append(L2)
                     Linf_all.append(Linf)
 
@@ -197,30 +205,21 @@ def load_sweep_results_from_csv(data_dir="../data", activation_fns=None):
     if not os.path.exists(data_dir):
         raise FileNotFoundError(f"Data directory '{data_dir}' not found")
 
-    # Determine which files to load
-    if activation_fns is None:
-        # Load all sweep CSV files
-        csv_files = [
-            f
-            for f in os.listdir(data_dir)
-            if f.startswith("sweep_") and f.endswith(".csv")
-        ]
-    else:
-        csv_files = [f"sweep_{act_name}.csv" for act_name in activation_fns]
+    # Collect all matching CSV files: {act_name}_L{L}_N{W}.csv
+    all_files = [f for f in os.listdir(data_dir) if f.endswith(".csv")]
+    if activation_fns is not None:
+        all_files = [f for f in all_files if any(f.startswith(act + "_") for act in activation_fns)]
 
-    if not csv_files:
+    if not all_files:
         raise FileNotFoundError(f"No sweep CSV files found in '{data_dir}'")
 
     # Load and concatenate all dataframes
     dfs = []
-    for csv_file in csv_files:
+    for csv_file in sorted(all_files):
         filepath = os.path.join(data_dir, csv_file)
-        if os.path.exists(filepath):
-            df = pd.read_csv(filepath)
-            dfs.append(df)
-            print(f"Loaded {filepath}")
-        else:
-            print(f"Warning: {filepath} not found, skipping")
+        df = pd.read_csv(filepath)
+        dfs.append(df)
+        print(f"Loaded {filepath}")
 
     if not dfs:
         raise FileNotFoundError("No valid CSV files could be loaded")

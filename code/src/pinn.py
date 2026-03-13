@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import flax.nnx as nnx
 import optax
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 try:
     from src.pde import u0_fn_2d, v0_fn_2d
@@ -70,8 +71,16 @@ class PINN_HardBC(nnx.Module):
         if self.dim == 1:
             # inp: (N,2) = [x,t]
             x = inp[:, 0:1]
+            t = inp[:, 1:2]
             N = self.network(inp)
-            return jnp.sin(jnp.pi * x) * N
+            if self.u_ic_fn is None:
+                # non-time-marching: hard BCs only
+                return jnp.sin(jnp.pi * x) * N
+            else:
+                # time-marching: hard BCs + hard IC
+                tau = t - self.t0
+                u_ic = self.u_ic_fn(x)
+                return u_ic + tau * jnp.sin(jnp.pi * x) * N
 
         elif self.dim == 2:
             # inp: (N,3) = [x,y,t]
@@ -100,6 +109,15 @@ def sample_points_wave_1d(key, N_int=512, N_ic=100, T=2.0, L=1.0):
 
     x_ic = jax.random.uniform(k3, (N_ic, 1), minval=0.0, maxval=L)
     t_ic = jnp.zeros((N_ic, 1))
+    return x_int, t_int, x_ic, t_ic
+
+
+def sample_points_wave_1d_window(key, N_int, N_ic, t0, t1, L=1.0):
+    k1, k2, k3 = jax.random.split(key, 3)
+    x_int = jax.random.uniform(k1, (N_int, 1), minval=0.0, maxval=L)
+    t_int = jax.random.uniform(k2, (N_int, 1), minval=t0, maxval=t1)
+    x_ic = jax.random.uniform(k3, (N_ic, 1), minval=0.0, maxval=L)
+    t_ic = jnp.full((N_ic, 1), t0)
     return x_int, t_int, x_ic, t_ic
 
 
@@ -250,52 +268,91 @@ def train_pinn(
                 optax.clip_by_global_norm(grad_clip),
                 base_optimizer,
             )
-            opt = nnx.Optimizer(model, tx, wrt=nnx.Param)
             print(f"Gradient clipping enabled: max_norm={grad_clip}")
         else:
-            opt = nnx.Optimizer(model, base_optimizer, wrt=nnx.Param)
+            tx = base_optimizer
 
-        losses = []
-        loss_components = {"pde": [], "ic_u": [], "ic_ut": []}
+        if steps_per_window is None:
+            steps_per_window = max(1, steps // max(1, n_windows))
 
-        @jax.jit
-        def train_step(model, opt, key):
-            key, subkey = jax.random.split(key)
-            x_int, t_int, x_ic, t_ic = sample_points_wave_1d(
-                subkey, N_int, N_ic, T=T, L=L
+        dt = T / n_windows
+        prev_model = None
+        histories = []
+
+        def _u0_1d(x):
+            return jnp.sin(jnp.pi * x)
+
+        _u0_fn = u0_fn if u0_fn is not None else _u0_1d
+
+        def make_ic_fn_1d(prev, t0_val):
+            return lambda x: prev(jnp.concatenate([x, jnp.full_like(x, t0_val)], axis=1))
+
+        print(f"Training PINN for 1D wave equation (c={c}, T={T})...")
+        print(f"Optimizer: {optimizer}")
+        print(f"Architecture: {layers}")
+        print(f"Windows: {n_windows}, steps_per_window: {steps_per_window}")
+        print(f"N_int: {N_int}, N_ic: {N_ic}, lambda_ic: {lambda_ic}")
+        print("-" * 60)
+
+        @nnx.jit
+        def train_step_window_1d(model, opt, key, t0_win, t1_win):
+            key, sub = jax.random.split(key)
+            x_int, t_int, x_ic, t_ic = sample_points_wave_1d_window(
+                sub, N_int, N_ic, t0_win, t1_win, L=L
             )
 
             def loss_func(m):
                 return loss_fn(
-                    m, x_int, t_int, x_ic, t_ic, c=c, lambda_ic=lambda_ic, dim=1
+                    m, x_int, t_int, x_ic, t_ic,
+                    c=c, lambda_ic=lambda_ic, dim=1,
+                    prev_model=prev_model,
+                    u0_fn=_u0_fn if prev_model is None else None,
+                    v0_fn=v0_fn,
+                    norm=norm,
+                    lambda_sob=lambda_sob,
                 )
 
             (loss, comps), grads = nnx.value_and_grad(loss_func, has_aux=True)(model)
             opt.update(model, grads)
             return model, opt, key, loss, comps
 
-        print(f"Training PINN for 1D wave equation (c={c}, T={T})...")
-        print(f"Optimizer: {optimizer}")
-        print(f"Architecture: {layers}")
-        print(f"Steps: {steps}, N_int: {N_int}, N_ic: {N_ic}")
-        print("-" * 60)
+        for k in range(n_windows):
+            t0_win = k * dt
+            t1_win = (k + 1) * dt
 
-        for step in range(steps):
-            model, opt, key, loss, comps = train_step(model, opt, key)
+            model.t0 = t0_win
+            model.u_ic_fn = _u0_fn if prev_model is None else make_ic_fn_1d(prev_model, t0_win)
+            opt = nnx.Optimizer(model, tx, wrt=nnx.Param)
+            hist = {"loss": [], "pde": [], "ic_u": [], "ic_ut": []}
 
-            losses.append(float(loss))
-            for k in ["pde", "ic_u", "ic_ut"]:
-                loss_components[k].append(float(comps[k]))
+            for s in range(steps_per_window):
+                model, opt, key, loss, comps = train_step_window_1d(model, opt, key, t0_win, t1_win)
+                hist["loss"].append(float(loss))
+                hist["pde"].append(float(comps["pde"]))
+                hist["ic_u"].append(float(comps["ic_u"]))
+                hist["ic_ut"].append(float(comps["ic_ut"]))
 
-            if step % 500 == 0 or step == steps - 1:
-                print(
-                    f"[{step:5d}] loss={float(loss):.3e} | "
-                    f"pde={float(comps['pde']):.3e} | "
-                    f"ic_u={float(comps['ic_u']):.3e} | "
-                    f"ic_ut={float(comps['ic_ut']):.3e}"
-                )
+                log_every = max(1, steps_per_window // 10)
+                if s % log_every == 0 or s == steps_per_window - 1:
+                    print(
+                        f"[window {t0_win:.3f}->{t1_win:.3f}] step {s:5d} | "
+                        f"loss={float(loss):.3e} "
+                        f"pde={float(comps['pde']):.3e} "
+                        f"ic_u={float(comps['ic_u']):.3e} "
+                        f"ic_ut={float(comps['ic_ut']):.3e}"
+                    )
 
-        return model, jnp.array(losses), loss_components
+            histories.append(hist)
+            prev_model = nnx.clone(model)
+
+        all_losses = jnp.array([v for h in histories for v in h["loss"]])
+        loss_components = {
+            "pde": [v for h in histories for v in h["pde"]],
+            "ic_u": [v for h in histories for v in h["ic_u"]],
+            "ic_ut": [v for h in histories for v in h["ic_ut"]],
+            "histories": histories,
+        }
+        return model, all_losses, loss_components
 
     # ---------------------------
     # dim=2: time-marching training
@@ -315,9 +372,20 @@ def train_pinn(
     prev_model = None
     histories = []
 
+    if not hasattr(optax, optimizer):
+        raise ValueError(
+            f"Unknown optimizer: {optimizer}. "
+            f"Available: adam, adamw, sgd, rmsprop, nadam"
+        )
+
+    schedule_2d = optax.exponential_decay(
+        init_value=lr,
+        transition_steps=1000,
+        decay_rate=0.95,
+    )
     tx = optax.chain(
         optax.clip_by_global_norm(grad_clip if grad_clip is not None else 1e9),
-        optax.adam(lr),
+        getattr(optax, optimizer)(schedule_2d),
     )
 
     @nnx.jit
@@ -362,8 +430,6 @@ def train_pinn(
             jnp.concatenate([x, y, jnp.full_like(x, t0_val)], axis=1)
         )
 
-    opt = nnx.Optimizer(model, tx, wrt=nnx.Param)
-
     for k in range(n_windows):
         t0 = k * dt
         t1 = (k + 1) * dt
@@ -371,6 +437,7 @@ def train_pinn(
         # Update the model's window offset and IC so the hard constraint is correct
         model.t0 = t0
         model.u_ic_fn = u0_fn if prev_model is None else make_ic_fn(prev_model, t0)
+        opt = nnx.Optimizer(model, tx, wrt=nnx.Param)  # fresh optimizer each window
         hist = {"loss": [], "pde": [], "ic_u": [], "ic_ut": []}
 
         for s in range(steps_per_window):
@@ -403,77 +470,3 @@ def train_pinn(
     }
     return model, all_losses, loss_components
 
-
-if __name__ == "__main__":
-    from plotting import error_report_2d_wave
-    from pde import u_exact_2d
-
-    # --- Parameters ---
-    c           = 1.0
-    L           = 1.0
-    T_final     = 1.0
-    n_windows   = 5
-    steps_per_window = 2000
-    N_int       = 2000
-    N_ic        = 200
-    lambda_ic   = 100.0
-    lr          = 1e-3
-    seed        = 0
-
-    # --- Train ---
-    model, losses, loss_comps = train_pinn(
-        dim=2,
-        layers=[3, 64, 64, 64, 1],
-        activations=[jax.nn.tanh] * 3,
-        n_windows=n_windows,
-        steps_per_window=steps_per_window,
-        N_int=N_int,
-        N_ic=N_ic,
-        T=T_final,
-        L=L,
-        c=c,
-        lambda_ic=lambda_ic,
-        lr=lr,
-        seed=seed,
-        grad_clip=1.0,
-        u0_fn=u0_fn_2d,
-        v0_fn=v0_fn_2d,
-        norm="Sobolev",
-    )
-
-    # --- Training loss plot ---
-    plt.figure(figsize=(10, 4))
-    plt.subplot(1, 2, 1)
-    plt.semilogy(losses)
-    plt.xlabel("Step (across windows)")
-    plt.ylabel("Loss")
-    plt.title("Training Loss")
-    plt.grid(True)
-
-    plt.subplot(1, 2, 2)
-    plt.semilogy(loss_comps["pde"], label="PDE")
-    plt.semilogy(loss_comps["ic_u"], label="IC u")
-    plt.semilogy(loss_comps["ic_ut"], label="IC ∂u/∂t")
-    plt.xlabel("Step (across windows)")
-    plt.ylabel("Loss component")
-    plt.title("Loss Components")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-    # --- Error metrics ---
-    times = jnp.linspace(0.0, T_final, n_windows + 1)
-    report = error_report_2d_wave(
-        model,
-        u_exact_fn=u_exact_2d,
-        times=times,
-        c=c,
-        L=L,
-        Nx=61,
-        Ny=61,
-        logy=True,
-        make_snapshot=True,
-        snapshot_metric="relL2",
-        title_prefix="2D PINN",
-    )

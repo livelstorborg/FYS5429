@@ -110,7 +110,7 @@ for te, ti in zip(t_evals, t_indices):
         ax.set_ylabel("y")
     fig.suptitle(r"Wave Equation Solutions — 2D metamaterial", fontsize=13)
     fig.tight_layout()
-    plt.savefig(f"figs/solution_2d_t{te:.3f}.pdf")
+    plt.savefig(f"figs/schemes/solution_2d_t{te:.3f}.pdf")
     plt.show()
 
 # ==================================================================
@@ -125,5 +125,5 @@ for te, ti in zip(t_evals, t_indices):
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     fig.tight_layout()
-    plt.savefig(f"figs/error_2d_fd_fem_t{te:.3f}.pdf")
+    plt.savefig(f"figs/schemes/error_2d_fd_fem_t{te:.3f}.pdf")
     plt.show()

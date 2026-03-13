@@ -109,5 +109,5 @@ subplot_fig = subplot_3d_surfaces(
     suptitle=r"Wave Equation Solutions — metamaterial",
     show=True,
     savefig=True,
-    filepath="figs/solution_surface_comparison_1d.pdf",
+    filepath="figs/schemes/solution_surface_comparison_1d.pdf",
 )

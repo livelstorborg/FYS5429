@@ -99,7 +99,7 @@ fig_fd_error = plot_3d_surface(
     title="Finite Difference Error (1D)",
     show=True,
     savefig=True,
-    filepath="figs/fd_error_surface_1d_const.pdf",
+    filepath="figs/schemes/fd_error_surface_1d_const.pdf",
 )
 
 fig_fem_error = plot_3d_surface(
@@ -111,5 +111,5 @@ fig_fem_error = plot_3d_surface(
     title="Finite Element Error (1D)",
     show=True,
     savefig=True,
-    filepath="figs/fem_error_surface_1d_const.pdf",
+    filepath="figs/schemes/fem_error_surface_1d_const.pdf",
 )

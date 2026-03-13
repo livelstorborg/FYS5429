@@ -77,8 +77,8 @@ def plot_error_heatmaps_2d(u_scheme, u_exact, t_indices, t_labels, label, savepa
 
 
 plot_error_heatmaps_2d(
-    u_fd, u_exact, t_indices, t_labels, "FD", "figs/fd_error_heatmaps_2d_const.pdf"
+    u_fd, u_exact, t_indices, t_labels, "FD", "figs/schemes/fd_error_heatmaps_2d_const.pdf"
 )
 plot_error_heatmaps_2d(
-    u_fem, u_exact, t_indices, t_labels, "FEM", "figs/fem_error_heatmaps_2d_const.pdf"
+    u_fem, u_exact, t_indices, t_labels, "FEM", "figs/schemes/fem_error_heatmaps_2d_const.pdf"
 )

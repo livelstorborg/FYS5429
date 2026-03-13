@@ -108,17 +108,19 @@ def loss_l2(
         loss_pde = pde_residual(model, xt_int, c, dim).mean()
 
         xt_ic = jnp.concatenate([x_ic, t_ic], axis=1)
-        u_ic_pred = model(xt_ic)
-        u_ic_true = jnp.sin(jnp.pi * x_ic)
-        loss_ic_u = jnp.mean((u_ic_pred - u_ic_true) ** 2)
+
+        if prev_model is None:
+            ut_true = v0_fn(x_ic).squeeze() if v0_fn is not None else jnp.zeros(x_ic.shape[0])
+        else:
+            ut_true = jax.lax.stop_gradient(u_t_batch(prev_model, xt_ic, dim=1))
 
         u_t_ic = u_t_batch(model, xt_ic, dim=1)
-        loss_ic_ut = jnp.mean(u_t_ic**2)
+        loss_ic_ut = jnp.mean((u_t_ic - ut_true) ** 2)
 
-        loss_total = loss_pde + lambda_ic * (loss_ic_u + loss_ic_ut)
+        loss_total = loss_pde + lambda_ic * loss_ic_ut
         return loss_total, {
             "pde": loss_pde,
-            "ic_u": loss_ic_u,
+            "ic_u": 0.0,
             "ic_ut": loss_ic_ut,
             "total": loss_total,
         }
@@ -197,17 +199,19 @@ def loss_sobolev(
         loss_sob = sob_sq.mean()
 
         xt_ic = jnp.concatenate([x_ic, t_ic], axis=1)
-        u_ic_pred = model(xt_ic)
-        u_ic_true = jnp.sin(jnp.pi * x_ic)
-        loss_ic_u = jnp.mean((u_ic_pred - u_ic_true) ** 2)
+
+        if prev_model is None:
+            ut_true = v0_fn(x_ic).squeeze() if v0_fn is not None else jnp.zeros(x_ic.shape[0])
+        else:
+            ut_true = jax.lax.stop_gradient(u_t_batch(prev_model, xt_ic, dim=1))
 
         u_t_ic = u_t_batch(model, xt_ic, dim=1)
-        loss_ic_ut = jnp.mean(u_t_ic**2)
+        loss_ic_ut = jnp.mean((u_t_ic - ut_true) ** 2)
 
-        loss_total = loss_pde + lambda_ic * (loss_ic_u + loss_ic_ut) + lambda_sob * loss_sob
+        loss_total = loss_pde + lambda_ic * loss_ic_ut + lambda_sob * loss_sob
         return loss_total, {
             "pde": loss_pde,
-            "ic_u": loss_ic_u,
+            "ic_u": 0.0,
             "ic_ut": loss_ic_ut,
             "sobolev": loss_sob,
             "total": loss_total,

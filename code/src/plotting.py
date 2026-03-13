@@ -3,6 +3,8 @@ import os
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
+from pathlib import Path
 from mpl_toolkits.mplot3d import Axes3D
 import flax.nnx as nnx
 
@@ -371,10 +373,43 @@ def plot_training_loss(losses):
     return losses_np
 
 
+def plot_loss(losses, show=True, savefig=False, filepath=None):
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.semilogy(losses)
+    ax.set_xlabel("Step (across windows)")
+    ax.set_ylabel("Loss")
+    ax.set_title("Training Loss")
+    ax.grid(True)
+    plt.tight_layout()
+    if savefig and filepath:
+        fig.savefig(filepath, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+    return fig
+
+
+def plot_loss_components(loss_comps, show=True, savefig=False, filepath=None):
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for key, label in [("pde", "PDE"), ("ic_ut", "IC ∂u/∂t"), ("sobolev", "Sobolev")]:
+        if key in loss_comps and any(v > 0 for v in loss_comps[key]):
+            ax.semilogy(loss_comps[key], label=label)
+    ax.set_xlabel("Step (across windows)")
+    ax.set_ylabel("Loss component")
+    ax.set_title("Loss Components")
+    ax.legend()
+    ax.grid(True)
+    plt.tight_layout()
+    if savefig and filepath:
+        fig.savefig(filepath, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+    return fig
+
+
 # -----------------------------------------------------------------------------
 # Part d: architecture sweep heatmaps
 # -----------------------------------------------------------------------------
-def plot_heatmap_width_depth(df, activation, show=True):
+def plot_heatmap_width_depth(df, activation, show=True, savefig=False, filepath=None):
     data = df[df["activation"] == activation]
 
     if data.empty:
@@ -458,6 +493,8 @@ def plot_heatmap_width_depth(df, activation, show=True):
 
     fig.tight_layout()
 
+    if savefig and filepath:
+        fig.savefig(filepath, dpi=300, bbox_inches="tight")
     if show:
         plt.show()
 
@@ -781,6 +818,79 @@ def error_report_2d_wave(
         "h1": h1_arr,
         "summary": summary,
     }
+
+
+def print_optimizer_comparison_tables(data_folder):
+    """
+    Read CSV files from optimizer subfolders and print comparison tables.
+    One table per optimizer with columns: Activation, Layers, Nodes, L2-error, Linf-error
+
+    Parameters:
+    -----------
+    data_folder : str or Path
+        Path to the data folder containing optimizer subdirectories
+        (e.g., 'data/1d_constant' which contains 'adam/', 'adamw/', 'lbfgs/')
+    """
+    data_path = Path(data_folder)
+
+    if not data_path.exists():
+        print(f"Error: Folder {data_path} does not exist!")
+        return
+
+    optimizer_dirs = sorted([d for d in data_path.iterdir() if d.is_dir()])
+
+    if not optimizer_dirs:
+        print(f"No optimizer subdirectories found in {data_path}")
+        return
+
+    print(f"\n{'=' * 80}")
+    print(f"Results from: {data_path}")
+    print(f"{'=' * 80}\n")
+
+    for opt_dir in optimizer_dirs:
+        optimizer_name = opt_dir.name
+        csv_files = list(opt_dir.glob("*.csv"))
+
+        if not csv_files:
+            print(f"No CSV files found for optimizer: {optimizer_name}")
+            continue
+
+        print(f"\n{'─' * 80}")
+        print(f"Optimizer: {optimizer_name.upper()}")
+        print(f"{'─' * 80}")
+
+        table_data = []
+        for csv_file in sorted(csv_files):
+            try:
+                df = pd.read_csv(csv_file)
+                parts = csv_file.stem.split("_")
+                if len(parts) >= 3:
+                    table_data.append({
+                        "Activation": parts[0],
+                        "Layers": int(parts[1].replace("L", "")),
+                        "Nodes": int(parts[2].replace("N", "")),
+                        "L2-error": f"{df['L2_rel'].mean():.6f}",
+                        "Linf-error": f"{df['Linf'].mean():.6f}",
+                    })
+            except Exception as e:
+                print(f"Warning: Could not read {csv_file}: {e}")
+
+        if table_data:
+            result_df = pd.DataFrame(table_data).sort_values(["Activation", "Layers", "Nodes"])
+            print(f"{'Activation':<12} {'Layers':<8} {'Nodes':<8} {'L2-error':<12} {'Linf-error':<12}")
+            prev_activation = None
+            for _, row in result_df.iterrows():
+                if prev_activation is not None and row["Activation"] != prev_activation:
+                    print("\n" + "-" * 60 + "\n")
+                print(f"{row['Activation']:<12} {row['Layers']:<8} {row['Nodes']:<8} {row['L2-error']:<12} {row['Linf-error']:<12}")
+                prev_activation = row["Activation"]
+
+            best = result_df.loc[result_df["L2-error"].astype(float).idxmin()]
+            print(f"\n  Best: {best['Activation']}, Layers={best['Layers']}, Nodes={best['Nodes']}, L2={best['L2-error']}")
+        else:
+            print("No data available for this optimizer")
+
+    print(f"\n{'=' * 80}\n")
 
 
 def plot_all_heatmaps(df, save_dir="figs", show=False):

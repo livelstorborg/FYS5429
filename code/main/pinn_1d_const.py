@@ -3,12 +3,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import jax
 import jax.numpy as jnp
 import jax.nn as jnn
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
-from src.pde import fd_solve, fem_solve, u_exact, create_grid
+from src.pde import fd_solve, fem_solve, u_exact, u_exact_1d, create_grid
 from src.pinn import train_pinn
 from src.experiment import absolute_error, relative_error, run_architecture_sweep
 from src.plotting import (
@@ -16,247 +18,177 @@ from src.plotting import (
     plot_scheme_errors_at_t,
     plot_3d_surface,
     subplot_3d_surfaces,
+    plot_loss,
+    plot_loss_components,
+    print_optimizer_comparison_tables,
+    plot_heatmap_width_depth,
 )
 
 
-def print_optimizer_comparison_tables(data_folder):
-    """
-    Read CSV files from optimizer subfolders and print comparison tables.
-    One table per optimizer with columns: Activation, Layers, Nodes, L2-error, Linf-error
-
-    Parameters:
-    -----------
-    data_folder : str or Path
-        Path to the data folder containing optimizer subdirectories
-        (e.g., '../data/1d_constant' which contains 'adam/', 'adamw/', 'lbfgs/')
-    """
-    data_path = Path(data_folder)
-
-    if not data_path.exists():
-        print(f"Error: Folder {data_path} does not exist!")
-        return
-
-    # Get all optimizer subdirectories
-    optimizer_dirs = [d for d in data_path.iterdir() if d.is_dir()]
-
-    if not optimizer_dirs:
-        print(f"No optimizer subdirectories found in {data_path}")
-        return
-
-    optimizer_dirs = sorted(optimizer_dirs)
-
-    print(f"\n{'=' * 80}")
-    print(f"Results from: {data_path}")
-    print(f"{'=' * 80}\n")
-
-    # Process each optimizer
-    for opt_dir in optimizer_dirs:
-        optimizer_name = opt_dir.name
-        csv_files = list(opt_dir.glob("*.csv"))
-
-        if not csv_files:
-            print(f"No CSV files found for optimizer: {optimizer_name}")
-            continue
-
-        print(f"\n{'─' * 80}")
-        print(f"Optimizer: {optimizer_name.upper()}")
-        print(f"{'─' * 80}")
-
-        # Collect data for this optimizer
-        table_data = []
-
-        for csv_file in sorted(csv_files):
-            try:
-                df = pd.read_csv(csv_file)
-
-                # Parse filename: {activation}_{layers}_{nodes}.csv
-                # Example: GeLU_L1_N32.csv -> activation=GeLU, layers=1, nodes=32
-                filename = csv_file.stem
-                parts = filename.split("_")
-
-                if len(parts) >= 3:
-                    activation = parts[0]
-                    layers = parts[1].replace("L", "")  # Remove 'L' prefix
-                    nodes = parts[2].replace("N", "")  # Remove 'N' prefix
-
-                    # Calculate mean errors across seeds
-                    l2_error = df["L2_rel"].mean()
-                    linf_error = df["Linf"].mean()
-
-                    table_data.append(
-                        {
-                            "Activation": activation,
-                            "Layers": int(layers),
-                            "Nodes": int(nodes),
-                            "L2-error": f"{l2_error:.6f}",
-                            "Linf-error": f"{linf_error:.6f}",
-                        }
-                    )
-
-            except Exception as e:
-                print(f"Warning: Could not read {csv_file}: {e}")
-
-        if table_data:
-            # Create DataFrame and sort by Activation, then Layers, then Nodes
-            result_df = pd.DataFrame(table_data)
-            result_df = result_df.sort_values(["Activation", "Layers", "Nodes"])
-
-            # Print with separators between different activation functions
-            print(
-                f"{'Activation':<12} {'Layers':<8} {'Nodes':<8} {'L2-error':<12} {'Linf-error':<12}"
-            )
-            prev_activation = None
-            for _, row in result_df.iterrows():
-                if prev_activation is not None and row["Activation"] != prev_activation:
-                    print()
-                    print("-" * 60)
-                    print()
-                print(
-                    f"{row['Activation']:<12} {row['Layers']:<8} {row['Nodes']:<8} {row['L2-error']:<12} {row['Linf-error']:<12}"
-                )
-                prev_activation = row["Activation"]
-        else:
-            print("No data available for this optimizer")
-
-    print(f"\n{'=' * 80}\n")
-
-
-Nx = 100
-T = 2.0
-c = 1.0
-cfl = 0.4
-
-
-x, t, dx, dt = create_grid(Nx=Nx, T=T, c=c, cfl=cfl, dim=1)
-
-u_exact = u_exact(x, t, c=c, dim=1)
-u_fd = fd_solve(x, t, dx, dt, c=c, dim=1)
-u_fem = fem_solve(x, t, dx, dt, c=c, dim=1)
-
-u_pinn, losses, loss_components = train_pinn(
-    steps=5000,
-    layers=[2, 32, 32, 32, 1],
-    activations=[jnn.silu, jnn.silu, jnn.silu],
-    N_int=100,
-    T=T,
-    c=c,
-    dim=1,
-    lambda_ic=10.0,
-)
-
-
-X_mesh, T_mesh = np.meshgrid(x, t)
-xt_test = jnp.column_stack([X_mesh.ravel(), T_mesh.ravel()])
-u_pinn_vals = u_pinn(xt_test).reshape(X_mesh.shape)
-
-
-fig_exact = plot_3d_surface(
-    x,
-    t,
-    u_exact,
-    elev=20,
-    azim=45,
-    title="Analytical Solution (1D)",
-    savefig=False,
-    show=False,
-)
-
-fig_fd = plot_3d_surface(
-    x,
-    t,
-    u_fd,
-    elev=20,
-    azim=45,
-    title="Finite Difference Solution (1D)",
-    savefig=False,
-    show=False,
-)
-
-fig_fem = plot_3d_surface(
-    x,
-    t,
-    u_fem,
-    elev=20,
-    azim=45,
-    title="Finite Element Solution (1D)",
-    savefig=False,
-    show=False,
-)
-
-fig_pinn = plot_3d_surface(
-    x,
-    t,
-    u_pinn_vals,
-    elev=20,
-    azim=45,
-    title="PINN Solution (1D)",
-    savefig=False,
-    show=False,
-)
-
-subplot_fig = subplot_3d_surfaces(
-    figures=[
-        {"x": x, "t": t, "U": u_exact},
-        {"x": x, "t": t, "U": u_fd},
-        {"x": x, "t": t, "U": u_fem},
-        {"x": x, "t": t, "U": u_pinn_vals},
-    ],
-    titles=["Analytical", "Finite Difference", "Finite Element", "PINN (SiLU)"],
-    elev=20,
-    azims=[45, 45, 45, 45],
-    cmap="viridis",
-    colorbar_label="u(x, t)",
-    suptitle="Wave Equation Solutions",
-    savefig=False,
-    filepath="figs/analytical_fd_pinn_silu_subplot.pdf",
-    show=True,
-)
-
-subplot_error = subplot_3d_surfaces(
-    figures=[
-        {"x": x, "t": t, "U": np.abs(u_fd - u_exact)},
-        {"x": x, "t": t, "U": np.abs(u_fem - u_exact)},
-        {"x": x, "t": t, "U": np.abs(u_pinn_vals - u_exact)},
-    ],
-    titles=["Finite Difference", "Finite Element", "PINN (SiLU)"],
-    elev=20,
-    azims=[45, 45, 45],
-    cmap="viridis",
-    colorbar_label="u(x, t)",
-    suptitle="Error",
-    savefig=False,
-    save_path="figs/comparison_subplot.pdf",
-    show=True,
-)
-
-
+# =============================================================
+#            Full archecture sweep for all optimizers, 
+#            activation functinos, widths and depths
+# =============================================================
 opt_names = ["adam", "adamw", "lbfgs"]
+hidden_widths = [32, 64, 128]
+num_hidden_layers = [2, 3, 4]
+activation_fns = {
+    "tanh": jnn.tanh,
+    "sine": jnp.sin,
+    "GeLU": jnn.gelu,
+    "SiLU": jnn.swish,
+    "ReLU": jnn.relu,
+}
 
 for opt in opt_names:
     run_architecture_sweep(
-        hidden_widths=[32, 64, 128],
-        num_hidden_layers=[2, 3, 4],
-        activation_fns={
-            "tanh": jnn.tanh,
-            "sine": jnp.sin,
-            "GeLU": jnn.gelu,
-            "SiLU": jnn.swish,
-            "ReLU": jnn.relu,
-        },
+        hidden_widths=hidden_widths,
+        num_hidden_layers=num_hidden_layers,
+        activation_fns=activation_fns,
         T=1.0,
-        steps=1000,
-        N_int=1000,
+        n_windows=1,
+        steps_per_window=2000,
+        N_int=500,
+        N_ic=100,
+        lambda_ic=100.0,
         lr=1e-3,
-        seeds=(0,),
-        Nx_eval=100,
-        Ny_eval=None,
-        Nt_eval=100,
+        grad_clip=1.0,
+        dim=1,
+        norm="L2",
+        seeds=(0, 42, 7, 103, 73),
+        Nx_eval=50,
+        Nt_eval=50,
         optimizer=opt,
         save_to_csv=True,
         use_pre_computed=False,
-        data_dir=f"data/1d_constant/{opt}",
+        data_dir=str(Path(__file__).parent.parent / "data" / "1d_const" / opt),
     )
 
 
-# Example usage: Print comparison tables for all optimizers in 1d_constant folder
-# print_optimizer_comparison_tables("../data/1d_constant")
+# =====================================================
+#          Heatmaps for width vs depth for sweep 
+# =====================================================
+for opt in opt_names:
+    df = run_architecture_sweep(
+        hidden_widths=hidden_widths,
+        num_hidden_layers=num_hidden_layers,
+        activation_fns=activation_fns,
+        use_pre_computed=True,
+        data_dir=str(Path(__file__).parent.parent / "data" / "1d_const" / opt),
+    )
+
+    for act in ["tanh", "sine", "GeLU", "SiLU", "ReLU"]:
+        plot_heatmap_width_depth(
+            df,
+            activation=act,
+            show=True,
+            savefig=True,
+            filepath=str(Path(__file__).parent.parent / "figs" / "1d_const" / f"heatmap_{opt}_{act}.pdf"),
+        )
+
+
+# =====================================================
+#          Printing results from sweep in tables 
+# =====================================================
+print_optimizer_comparison_tables(
+    Path(__file__).parent.parent / "data" / "1d_const"
+)
+
+
+
+
+
+
+
+
+# =====================================================
+#            Loss for single model
+#            will use this for the best model (maybe)
+# =====================================================
+"""
+Experiment for testing, using windows=1 for the simple 1d constant case 
+    - windows=1 gives no spikes when switching windows 
+    - for time-marchin to be reasonable, we need to train sufficiently long, so that the error isnt accumulating
+    - when doing a sweep we cant let each model train that long, and time-marching isnt the way to go
+"""
+
+
+# # --- Parameters ---
+# c           = 1.0
+# L           = 1.0
+# T_final     = 1.0
+# n_windows   = 1
+# steps_per_window = 10000
+# N_int       = 2000
+# N_ic        = 200
+# lambda_ic   = 100.0
+# lr          = 1e-3
+# seed        = 0
+
+# # --- Train ---
+# model, losses, loss_comps = train_pinn(
+#     dim=1,
+#     layers=[2, 64, 64, 64, 1],
+#     activations=[jax.nn.gelu] * 3,
+#     steps=n_windows * steps_per_window,
+#     n_windows=n_windows,
+#     steps_per_window=steps_per_window,
+#     N_int=N_int,
+#     N_ic=N_ic,
+#     T=T_final,
+#     L=L,
+#     c=c,
+#     lambda_ic=lambda_ic,
+#     lr=lr,
+#     seed=seed,
+#     grad_clip=1.0,
+# )
+
+# # --- 3D surface plots ---
+# Nx_plot, Nt_plot = 100, 100
+# x_plot = jnp.linspace(0.0, L, Nx_plot)
+# t_plot = jnp.linspace(0.0, T_final, Nt_plot)
+
+# # Evaluate PINN on grid: U shape (Nt, Nx)
+# X_grid, T_grid = jnp.meshgrid(x_plot, t_plot)         
+# inp = jnp.stack([X_grid.ravel(), T_grid.ravel()], axis=1)
+# U_pinn = model(inp).reshape(Nt_plot, Nx_plot)
+
+# U_exact = u_exact_1d(x_plot, t_plot, c=c)
+# U_abs_error = jnp.abs(U_pinn - U_exact)
+# U_rel_error = U_abs_error / (jnp.abs(U_exact) + 1e-8)
+
+# subplot_fig = subplot_3d_surfaces(
+#     figures=[
+#         {"x": x_plot, "t": t_plot, "U": U_exact},
+#         {"x": x_plot, "t": t_plot, "U": U_pinn},
+#         {"x": x_plot, "t": t_plot, "U": U_abs_error},
+#         {"x": x_plot, "t": t_plot, "U": U_rel_error},
+#     ],
+#     titles=["Analytical", "PINN", "Absolute Error", "Relative Error"],
+#     elev=20,
+#     azims=[45, 45, 45, 45],
+#     cmap="viridis",
+#     colorbar_label="u(x, t)",
+#     suptitle="Wave Equation Solutions — 1D PINN",
+#     show=True,
+#     savefig=True,
+#     filepath=str(Path(__file__).parent.parent / "figs" / "1d_const" / "solution_surface_pinn_1d.pdf"),
+# )
+
+
+
+# # --- Training loss plots ---
+# plot_loss(
+#     losses,
+#     show=True,
+#     savefig=True,
+#     filepath=str(Path(__file__).parent.parent / "figs" / "1d_const" / "training_loss_pinn_1d_const.pdf"),
+# )
+# plot_loss_components(
+#     loss_comps,
+#     show=True,
+#     savefig=True,
+#     filepath=str(Path(__file__).parent.parent / "figs" / "1d_const" / "training_loss_components_pinn_1d_const.pdf"),
+# )
+
