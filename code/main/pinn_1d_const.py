@@ -26,8 +26,8 @@ from src.plotting import (
 
 
 # =============================================================
-#            Full archecture sweep for all optimizers,
-#            activation functinos, widths and depths
+#            Full architecture sweep for all optimizers,
+#            activation functions, widths and depths
 # =============================================================
 opt_names = ["adam", "adamw", "lbfgs"]
 hidden_widths = [32, 64, 128]
@@ -59,15 +59,15 @@ for opt in opt_names:
         Nx_eval=50,
         Nt_eval=50,
         optimizer=opt,
-        save_to_csv=True,
-        use_pre_computed=False,
+        save_to_csv=False,
+        use_pre_computed=True,
         data_dir=str(Path(__file__).parent.parent / "data" / "1d_const" / opt),
     )
 
 
-# =====================================================
-#          Heatmaps for width vs depth for sweep 
-# =====================================================
+# ============================================================================================
+#          Heatmaps for width vs depth for sweep (all optimizers and activations)
+# ============================================================================================
 for opt in opt_names:
     df = run_architecture_sweep(
         hidden_widths=hidden_widths,
