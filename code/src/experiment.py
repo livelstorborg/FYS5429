@@ -6,9 +6,14 @@ import jax.nn as jnn
 import jax.numpy as jnp
 import numpy as np
 
-from src.pde import fd_solve, u_exact
-from src.pinn import train_pinn
-from src.utils import compute_error_metrics_1d, compute_error_metrics_2d
+try:
+    from src.pde import u_exact
+    from src.pinn import train_wave_pinn, pack_params
+    from src.utils import compute_error_metrics_1d, compute_error_metrics_2d
+except ModuleNotFoundError:
+    from pde import u_exact
+    from pinn import train_wave_pinn, pack_params
+    from utils import compute_error_metrics_1d, compute_error_metrics_2d
 
 
 # ---------- Utils (might delete) ----------
@@ -26,147 +31,147 @@ def run_architecture_sweep(
     num_hidden_layers,
     activation_fns,
     *,
-    T=0.5,
-    steps=5000,
-    n_windows=5,
-    steps_per_window=None,
+    T=1.0,
     N_int=1000,
     N_ic=100,
-    lambda_ic=10.0,
+    lambda_ic=100.0,
     lr=1e-3,
-    grad_clip=1.0,
-    dim=1,
-    norm="L2",
-    lambda_sob=1.0,
-    seeds=(0,),
-    Nx_eval=100,
-    Ny_eval=None,
-    Nt_eval=100,
-    optimizer="adam",
-    lr_schedule="exponential",
+    c=1.0,
+    adam_steps=5000,
+    lbfgs_steps=500,
+    seeds=(0, 7, 103, 42),
+    Nx_eval=50,
+    Nt_eval=50,
     save_to_csv=False,
     use_pre_computed=False,
     data_dir="data",
 ):
     """
-    Run a general architecture sweep over:
-      - hidden_widths:        list[int]
-      - num_hidden_layers:    list[int]
-      - activation_fns:       dict[str, callable]
+    Architecture sweep over hidden widths, depths, and activation functions.
 
-    Optional keyword arguments allow further control.
-    If use_pre_computed=True, loads results from existing CSV files.
-    If save_to_csv=True (and use_pre_computed=False), saves individual
-    seed results to CSV files (one per architecture: activation_L{layers}_N{width}.csv)
-    in data_dir.
+    For each architecture and seed: trains Adam, then warm-starts L-BFGS from
+    Adam's converged params.  Both optimizers' results are saved together.
 
-    Returns:
-      A DataFrame with aggregated results (means over seeds).
+    Returns a dict {"adam": DataFrame, "lbfgs": DataFrame}, each with columns:
+        activation, hidden_layers, width, L2_rel_mean, Linf_mean
     """
-
     if use_pre_computed:
-        print("Loading pre-computed results from CSV files...")
+        print(f"Loading pre-computed results from {data_dir} ...")
         act_names = list(activation_fns.keys())
-        return load_sweep_results_from_csv(data_dir=data_dir, activation_fns=act_names)
+        return {
+            opt: load_sweep_results_from_csv(
+                data_dir=os.path.join(data_dir, opt), activation_fns=act_names
+            )
+            for opt in ("adam", "lbfgs")
+        }
 
-    print("Running architecture sweep...")
-
+    print(f"========== ARCHITECTURE SWEEP ==========\n adam({adam_steps} steps) → lbfgs({lbfgs_steps} steps)")
     if save_to_csv:
-        os.makedirs(data_dir, exist_ok=True)
+        for opt in ("adam", "lbfgs"):
+            os.makedirs(os.path.join(data_dir, opt), exist_ok=True)
 
-    all_results = []
-    total_start_time = time.time()
+    x_eval = jnp.linspace(0.0, 1.0, Nx_eval)
+    t_eval = jnp.linspace(0.0, T, Nt_eval)
+
+    all_results = {"adam": [], "lbfgs": []}
+    total_start = time.time()
 
     for act_name, act_fn in activation_fns.items():
-        print(f"---------- {act_name} ----------")
-        act_start_time = time.time()
+        print(f"\n---------- {act_name} ----------")
+        act_start = time.time()
 
-        for L in num_hidden_layers:
-            for W in hidden_widths:
-                print(f"Layers: {L}, Nodes: {W}")
-                layers = [dim + 1] + [W] * L + [1]
-                activations = [act_fn] * (len(layers) - 2)
+        for depth in num_hidden_layers:
+            for width in hidden_widths:
+                widths = tuple([width] * depth)
+                print(f"  Layers={depth}, Width={width}")
 
-                L2_all = []
-                Linf_all = []
-                arch_results = []  # Store results for this specific architecture
+                arch_rows = {"adam": [], "lbfgs": []}
+                L2_all    = {"adam": [], "lbfgs": []}
+                Linf_all  = {"adam": [], "lbfgs": []}
 
                 for seed in seeds:
-                    print(f"SEED = {seed}")
-                    model, losses, loss_components = train_pinn(
-                        layers=layers,
-                        activations=activations,
-                        steps=steps,
-                        n_windows=n_windows,
-                        steps_per_window=steps_per_window,
+                    print(f"SEED={seed}\n")
+
+                    # --- Adam ---
+                    model_adam, _, _ = train_wave_pinn(
+                        widths=widths,
+                        activation=act_fn,
+                        optimizer="adam",
+                        steps=adam_steps,
                         N_int=N_int,
                         N_ic=N_ic,
-                        lambda_ic=lambda_ic,
                         T=T,
+                        c=c,
+                        lambda_ic=lambda_ic,
                         lr=lr,
-                        grad_clip=grad_clip,
-                        dim=dim,
-                        norm=norm,
-                        lambda_sob=lambda_sob,
                         seed=seed,
-                        optimizer=optimizer,
-                        lr_schedule=lr_schedule,
+                        adam_warmup_steps=0,
+                        log_every=adam_steps,
                     )
-
-                    x_eval = jnp.linspace(0, 1, Nx_eval)
-                    t_eval = jnp.linspace(0, T, Nt_eval)
-
-                    if dim == 1:
-                        L2, Linf, _, _, _ = compute_error_metrics_1d(model, x=x_eval, t=t_eval)
-                    else:
-                        y_eval = jnp.linspace(0, 1, Ny_eval) if Ny_eval else jnp.linspace(0, 1, Nx_eval)
-                        L2, Linf, _, _, _ = compute_error_metrics_2d(model, x=x_eval, y=y_eval, t=t_eval)
-                    L2_all.append(L2)
-                    Linf_all.append(Linf)
-
+                    L2, Linf, _, _, _ = compute_error_metrics_1d(
+                        model_adam, x=x_eval, t=t_eval, c=c
+                    )
+                    print(f"Adam: Relative L2={float(L2):.3e}  Linf={float(Linf):.3e}")
+                    L2_all["adam"].append(L2)
+                    Linf_all["adam"].append(Linf)
                     if save_to_csv:
-                        arch_results.append(
-                            {
-                                "activation": act_name,
-                                "hidden_layers": L,
-                                "width": W,
-                                "seed": seed,
-                                "L2_rel": float(L2),
-                                "Linf": float(Linf),
-                            }
+                        arch_rows["adam"].append({
+                            "activation": act_name, "hidden_layers": depth,
+                            "width": width, "seed": seed,
+                            "L2_rel": float(L2), "Linf": float(Linf),
+                        })
+
+                    # --- L-BFGS warm-started from Adam ---
+                    model_lbfgs, _, _ = train_wave_pinn(
+                        widths=widths,
+                        activation=act_fn,
+                        optimizer="lbfgs",
+                        steps=lbfgs_steps,
+                        N_int=N_int,
+                        N_ic=N_ic,
+                        T=T,
+                        c=c,
+                        lambda_ic=lambda_ic,
+                        lr=lr,
+                        seed=seed,
+                        adam_warmup_steps=0,
+                        init_params=pack_params(model_adam),
+                        log_every=lbfgs_steps,
+                    )
+                    L2, Linf, _, _, _ = compute_error_metrics_1d(
+                        model_lbfgs, x=x_eval, t=t_eval, c=c
+                    )
+                    print(f"L-BFGS: Relative L2={float(L2):.3e}  Linf={float(Linf):.3e}")
+                    L2_all["lbfgs"].append(L2)
+                    Linf_all["lbfgs"].append(Linf)
+                    if save_to_csv:
+                        arch_rows["lbfgs"].append({
+                            "activation": act_name, "hidden_layers": depth,
+                            "width": width, "seed": seed,
+                            "L2_rel": float(L2), "Linf": float(Linf),
+                        })
+
+                if save_to_csv:
+                    for opt in ("adam", "lbfgs"):
+                        fname = os.path.join(
+                            data_dir, opt, f"{act_name}_L{depth}_N{width}.csv"
                         )
+                        pd.DataFrame(arch_rows[opt]).to_csv(fname, index=False)
+                        print(f"    saved {fname}")
 
-                # Save CSV for this specific architecture
-                if save_to_csv and arch_results:
-                    df_arch = pd.DataFrame(arch_results)
-                    filename = os.path.join(data_dir, f"{act_name}_L{L}_N{W}.csv")
-                    df_arch.to_csv(filename, index=False)
-                    print(f"Saved to {filename}")
+                for opt in ("adam", "lbfgs"):
+                    all_results[opt].append({
+                        "activation":    act_name,
+                        "hidden_layers": depth,
+                        "width":         width,
+                        "L2_rel_mean":   float(np.mean(L2_all[opt])),
+                        "Linf_mean":     float(np.mean(Linf_all[opt])),
+                    })
 
-                result = {
-                    "activation": act_name,
-                    "hidden_layers": L,
-                    "width": W,
-                    "L2_rel_mean": float(sum(L2_all) / len(L2_all)),
-                    "Linf_mean": float(sum(Linf_all) / len(Linf_all)),
-                }
+        print(f"  {act_name} done in {time.time()-act_start:.1f}s  "
+              f"(total {time.time()-total_start:.1f}s)\n")
 
-                print(
-                    f"L2_rel={result['L2_rel_mean']:.3e}, "
-                    f"Linf={result['Linf_mean']:.3e}"
-                )
-
-                all_results.append(result)
-                print("\n")
-
-        act_elapsed = time.time() - act_start_time
-        total_elapsed = time.time() - total_start_time
-        print(f"    {act_name} completed in {act_elapsed:.1f}s")
-        print(f"    Total time elapsed: {total_elapsed:.1f}s")
-        print("\n")
-
-    results_df = pd.DataFrame(all_results)
-    return results_df
+    return {opt: pd.DataFrame(rows) for opt, rows in all_results.items()}
 
 
 # ---------- Learningrate sweep ----------

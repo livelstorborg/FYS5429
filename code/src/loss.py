@@ -1,323 +1,221 @@
+"""
+loss_nnx.py
+
+Structured loss functions for the params-based NNX wave PINN (pinn_wave_nnx.py).
+
+Mirrors loss.py in structure but works with the (params, activation) pytree API,
+which is required for nested JAX autodiff (grad inside the residual, then grad of
+the total loss for the outer optimizer).
+
+Supported norms:
+  "L2"  — MSE on PDE residual  r = u_tt - c²u_xx
+  "H1"  — L2 + lambda_sob  * MSE on ‖∇_xt r‖²   (gradient of residual w.r.t. inputs)
+  "H2"  — H1 + lambda_sob2 * MSE on ‖H_xt r‖²_F  (Frobenius norm of Hessian of r)
+
+IC term (u_t(x,0)=0 soft penalty) is identical across all norms, because the
+displacement IC is enforced hard via the ansatz in pinn_wave_nnx.py.
+"""
+
 import jax
 import jax.numpy as jnp
 
 
-# -----------------------------------------------------------------------------
-# PDE residuals
-# -----------------------------------------------------------------------------
-def pde_residual(model, xyzt, c, dim):
+# =============================================================================
+# Forward pass and derivative helpers  (self-contained — no circular import)
+# These mirror the functions in pinn_wave_nnx.py but live here so loss_nnx.py
+# has no dependency on pinn_wave_nnx.py.
+# =============================================================================
+
+def _forward_params(params, xt2d, activation):
+    ws, bs = params
+    z = xt2d
+    for W, b in zip(ws[:-1], bs[:-1]):
+        z = activation(z @ W + b)
+    return z @ ws[-1] + bs[-1]
+
+
+def _u_hat_params(params, xt2d, activation):
+    """Hard-BC/IC ansatz: u(x,t) = sin(πx) + t·sin(πx)·N(x,t)."""
+    x = xt2d[:, 0]
+    t = xt2d[:, 1]
+    N = _forward_params(params, xt2d, activation)[:, 0]
+    return jnp.sin(jnp.pi * x) + t * jnp.sin(jnp.pi * x) * N
+
+
+def _u_scalar(params, x, t, activation):
+    xt = jnp.stack([x, t])[None]
+    return _u_hat_params(params, xt, activation)[0]
+
+
+def _u_t(params, x, t, activation):
+    return jax.grad(lambda t_: _u_scalar(params, x, t_, activation))(t)
+
+
+def _u_tt(params, x, t, activation):
+    return jax.grad(jax.grad(lambda t_: _u_scalar(params, x, t_, activation)))(t)
+
+
+def _u_xx(params, x, t, activation):
+    return jax.grad(jax.grad(lambda x_: _u_scalar(params, x_, t, activation)))(x)
+
+
+# =============================================================================
+# Scalar residual
+# =============================================================================
+
+def r_scalar_params(params, x, t, c, activation):
+    """Scalar PDE residual r = u_tt - c² u_xx at a single (x, t) point."""
+    utt = _u_tt(params, x, t, activation)
+    uxx = _u_xx(params, x, t, activation)
+    return utt - c**2 * uxx
+
+
+# =============================================================================
+# PDE residual terms — one function per norm
+# =============================================================================
+
+def pde_terms_l2(params, x_int, t_int, c, activation):
     """
-    Compute PDE residual for wave equation in 1D or 2D.
+    L2: mean(r²).
 
-    Wave equation:
-    - 1D: u_tt - c^2 u_xx = 0
-    - 2D: u_tt - c^2 (u_xx + u_yy) = 0
-
-    Returns squared residual per point: (N,)
+    Returns (loss_pde, extra_dict).  extra_dict is empty for L2.
     """
+    def r_single(xi, ti):
+        return r_scalar_params(params, xi, ti, c, activation)
 
-    def u_single(z):
-        return model(z[None, :])[0, 0]
-
-    def hessian_single(z):
-        return jax.hessian(u_single)(z)
-
-    hess = jax.vmap(hessian_single)(xyzt)  # (N, dim+1, dim+1)
-
-    if dim == 1:
-        u_xx = hess[:, 0, 0]
-        u_tt = hess[:, 1, 1]
-        lap = u_xx
-    elif dim == 2:
-        u_xx = hess[:, 0, 0]
-        u_yy = hess[:, 1, 1]
-        u_tt = hess[:, 2, 2]
-        lap = u_xx + u_yy
-    else:
-        raise ValueError(f"dim must be 1 or 2, got {dim}")
-
-    r = u_tt - c**2 * lap
-    return r**2
+    r = jax.vmap(r_single)(x_int, t_int)
+    return jnp.mean(r**2), {}
 
 
-def u_t_batch(model, xyt, dim):
-    """Batch u_t for dim=1 or dim=2, where time is last coordinate."""
-
-    def u_single(z):
-        return model(z[None, :])[0, 0]
-
-    def u_t_single(z):
-        g = jax.grad(u_single)(z)
-        return g[dim]  # time index: 1 for dim=1, 2 for dim=2
-
-    return jax.vmap(u_t_single)(xyt)
-
-
-def pde_residual_sobolev(model, xyzt, c, dim):
+def pde_terms_h1(params, x_int, t_int, c, activation):
     """
-    Compute squared PDE residual and squared gradient of residual (Sobolev/H1 terms).
+    H1 (Sobolev): mean(r²) plus mean(‖∇_xt r‖²).
 
-    For each collocation point returns (r², ‖∇r‖²) where r is the wave-equation
-    residual and ∇r is its gradient w.r.t. all inputs.
+    ∇_xt r = (∂r/∂x, ∂r/∂t) — 3rd-order derivatives of u.
 
-    Returns two arrays of shape (N,): (r_sq, sob_sq).
+    Returns (loss_pde, {"sobolev": loss_sob}).
     """
+    def r_and_grad_single(xi, ti):
+        r = r_scalar_params(params, xi, ti, c, activation)
+        dr_dx, dr_dt = jax.grad(r_scalar_params, argnums=(1, 2))(
+            params, xi, ti, c, activation
+        )
+        return r**2, dr_dx**2 + dr_dt**2
 
-    def u_single(z):
-        return model(z[None, :])[0, 0]
-
-    def r_single(z):
-        H = jax.hessian(u_single)(z)
-        if dim == 1:
-            return H[1, 1] - c**2 * H[0, 0]           # u_tt - c²u_xx
-        else:
-            return H[2, 2] - c**2 * (H[0, 0] + H[1, 1])  # u_tt - c²(u_xx+u_yy)
-
-    def sob_single(z):
-        r = r_single(z)
-        grad_r = jax.grad(r_single)(z)
-        return r**2, jnp.sum(grad_r**2)
-
-    return jax.vmap(sob_single)(xyzt)  # (r_sq, sob_sq), each shape (N,)
+    r_sq, grad_sq = jax.vmap(r_and_grad_single)(x_int, t_int)
+    return r_sq.mean(), {"sobolev": grad_sq.mean()}
 
 
-# -----------------------------------------------------------------------------
-# Loss functions
-# -----------------------------------------------------------------------------
-def loss_l2(
-    model,
-    x_int,
-    t_int,
-    x_ic,
-    t_ic,
-    *,
-    c=1.0,
-    lambda_ic=10.0,
-    dim=1,
-    y_int=None,
-    y_ic=None,
-    prev_model=None,
-    u0_fn=None,
-    v0_fn=None,
-    t0=None,
-):
-    """Standard L2 (MSE) loss for the wave-equation PINN."""
-
-    if dim == 1:
-        xt_int = jnp.concatenate([x_int, t_int], axis=1)
-        loss_pde = pde_residual(model, xt_int, c, dim).mean()
-
-        xt_ic = jnp.concatenate([x_ic, t_ic], axis=1)
-
-        if prev_model is None:
-            ut_true = v0_fn(x_ic).squeeze() if v0_fn is not None else jnp.zeros(x_ic.shape[0])
-        else:
-            ut_true = jax.lax.stop_gradient(u_t_batch(prev_model, xt_ic, dim=1))
-
-        u_t_ic = u_t_batch(model, xt_ic, dim=1)
-        loss_ic_ut = jnp.mean((u_t_ic - ut_true) ** 2)
-
-        loss_total = loss_pde + lambda_ic * loss_ic_ut
-        return loss_total, {
-            "pde": loss_pde,
-            "ic_u": 0.0,
-            "ic_ut": loss_ic_ut,
-            "total": loss_total,
-        }
-
-    elif dim == 2:
-        if y_int is None or y_ic is None:
-            raise ValueError("For dim=2 you must provide y_int and y_ic.")
-        if t0 is None:
-            raise ValueError("For dim=2 you must provide t0 (window start time).")
-
-        xyt_int = jnp.concatenate([x_int, y_int, t_int], axis=1)
-        xyt_ic = jnp.concatenate([x_ic, y_ic, t_ic], axis=1)
-
-        loss_pde = pde_residual(model, xyt_int, c, dim=2).mean()
-
-        if prev_model is None:
-            if u0_fn is None or v0_fn is None:
-                raise ValueError(
-                    "For dim=2 with prev_model=None you must provide u0_fn and v0_fn."
-                )
-            u_true = u0_fn(x_ic, y_ic).squeeze()
-            ut_true = v0_fn(x_ic, y_ic).squeeze()
-        else:
-            u_true = prev_model(xyt_ic).squeeze()
-            ut_true = u_t_batch(prev_model, xyt_ic, dim=2)
-            u_true = jax.lax.stop_gradient(u_true)
-            ut_true = jax.lax.stop_gradient(ut_true)
-
-        u_pred = model(xyt_ic).squeeze()
-        ut_pred = u_t_batch(model, xyt_ic, dim=2)
-
-        loss_ic_u = jnp.mean((u_pred - u_true) ** 2)
-        loss_ic_ut = jnp.mean((ut_pred - ut_true) ** 2)
-
-        loss_total = loss_pde + lambda_ic * (loss_ic_u + loss_ic_ut)
-        return loss_total, {
-            "pde": loss_pde,
-            "ic_u": loss_ic_u,
-            "ic_ut": loss_ic_ut,
-            "total": loss_total,
-        }
-
-    else:
-        raise ValueError(f"dim must be 1 or 2, got {dim}")
-
-
-def loss_sobolev(
-    model,
-    x_int,
-    t_int,
-    x_ic,
-    t_ic,
-    *,
-    c=1.0,
-    lambda_ic=10.0,
-    dim=1,
-    lambda_sob=1.0,
-    y_int=None,
-    y_ic=None,
-    prev_model=None,
-    u0_fn=None,
-    v0_fn=None,
-    t0=None,
-):
+def pde_terms_h2(params, x_int, t_int, c, activation):
     """
-    Sobolev (H1) loss for the wave-equation PINN.
+    H2: mean(r²) plus mean(‖∇_xt r‖²) plus mean(‖H_xt r‖²_F).
 
-    Penalises both r² (standard L2 PDE residual) and ‖∇r‖² (gradient of residual
-    w.r.t. inputs), weighted by lambda_sob.
+    H_xt r is the 2×2 Hessian of r w.r.t. (x, t) — 4th-order derivatives of u.
+    Frobenius norm: ‖H‖²_F = r_xx² + 2*r_xt² + r_tt²
+
+    Returns (loss_pde, {"sobolev": loss_sob, "sobolev2": loss_sob2}).
     """
+    def r_of_xt(xt, params, c, activation):
+        return r_scalar_params(params, xt[0], xt[1], c, activation)
 
-    if dim == 1:
-        xt_int = jnp.concatenate([x_int, t_int], axis=1)
-        r_sq, sob_sq = pde_residual_sobolev(model, xt_int, c, dim)
-        loss_pde = r_sq.mean()
-        loss_sob = sob_sq.mean()
+    def terms_single(xi, ti):
+        xt = jnp.stack([xi, ti])
+        r = r_of_xt(xt, params, c, activation)
 
-        xt_ic = jnp.concatenate([x_ic, t_ic], axis=1)
+        grad_r = jax.grad(r_of_xt)(xt, params, c, activation)          # (2,)
+        hess_r = jax.hessian(r_of_xt)(xt, params, c, activation)       # (2, 2)
 
-        if prev_model is None:
-            ut_true = v0_fn(x_ic).squeeze() if v0_fn is not None else jnp.zeros(x_ic.shape[0])
-        else:
-            ut_true = jax.lax.stop_gradient(u_t_batch(prev_model, xt_ic, dim=1))
+        return r**2, jnp.sum(grad_r**2), jnp.sum(hess_r**2)
 
-        u_t_ic = u_t_batch(model, xt_ic, dim=1)
-        loss_ic_ut = jnp.mean((u_t_ic - ut_true) ** 2)
+    r_sq, grad_sq, hess_sq = jax.vmap(terms_single)(x_int, t_int)
+    return r_sq.mean(), {
+        "sobolev":  grad_sq.mean(),
+        "sobolev2": hess_sq.mean(),
+    }
 
-        loss_total = loss_pde + lambda_ic * loss_ic_ut + lambda_sob * loss_sob
-        return loss_total, {
-            "pde": loss_pde,
-            "ic_u": 0.0,
-            "ic_ut": loss_ic_ut,
-            "sobolev": loss_sob,
-            "total": loss_total,
-        }
 
-    elif dim == 2:
-        if y_int is None or y_ic is None:
-            raise ValueError("For dim=2 you must provide y_int and y_ic.")
-        if t0 is None:
-            raise ValueError("For dim=2 you must provide t0 (window start time).")
-
-        xyt_int = jnp.concatenate([x_int, y_int, t_int], axis=1)
-        xyt_ic = jnp.concatenate([x_ic, y_ic, t_ic], axis=1)
-
-        r_sq, sob_sq = pde_residual_sobolev(model, xyt_int, c, dim)
-        loss_pde = r_sq.mean()
-        loss_sob = sob_sq.mean()
-
-        if prev_model is None:
-            if u0_fn is None or v0_fn is None:
-                raise ValueError(
-                    "For dim=2 with prev_model=None you must provide u0_fn and v0_fn."
-                )
-            u_true = u0_fn(x_ic, y_ic).squeeze()
-            ut_true = v0_fn(x_ic, y_ic).squeeze()
-        else:
-            u_true = prev_model(xyt_ic).squeeze()
-            ut_true = u_t_batch(prev_model, xyt_ic, dim=2)
-            u_true = jax.lax.stop_gradient(u_true)
-            ut_true = jax.lax.stop_gradient(ut_true)
-
-        u_pred = model(xyt_ic).squeeze()
-        ut_pred = u_t_batch(model, xyt_ic, dim=2)
-
-        loss_ic_u = jnp.mean((u_pred - u_true) ** 2)
-        loss_ic_ut = jnp.mean((ut_pred - ut_true) ** 2)
-
-        loss_total = loss_pde + lambda_ic * (loss_ic_u + loss_ic_ut) + lambda_sob * loss_sob
-        return loss_total, {
-            "pde": loss_pde,
-            "ic_u": loss_ic_u,
-            "ic_ut": loss_ic_ut,
-            "sobolev": loss_sob,
-            "total": loss_total,
-        }
-
-    else:
-        raise ValueError(f"dim must be 1 or 2, got {dim}")
-
+# =============================================================================
+# Unified loss function
+# =============================================================================
 
 def loss_fn(
-    model,
+    params,
     x_int,
     t_int,
     x_ic,
-    t_ic,
+    c,
+    lambda_ic,
+    activation,
     *,
-    c=1.0,
-    lambda_ic=10.0,
-    dim=1,
     norm="L2",
     lambda_sob=1.0,
-    y_int=None,
-    y_ic=None,
-    prev_model=None,
-    u0_fn=None,
-    v0_fn=None,
-    t0=None,
+    lambda_sob2=1.0,
 ):
     """
-    Unified loss dispatcher.
+    Total PINN loss with selectable norm.
 
-    norm="L2"     — standard MSE on PDE residual (default, backward compatible)
-    norm="Sobolev" — MSE on residual + lambda_sob * MSE on gradient of residual (H1)
+    Parameters
+    ----------
+    params      : (ws, bs) parameter pytree from pack_params
+    x_int       : (N_int,) interior x collocation points
+    t_int       : (N_int,) interior t collocation points
+    x_ic        : (N_ic,)  IC x collocation points (evaluated at t=0)
+    c           : wave speed (scalar JAX array)
+    lambda_ic   : IC loss weight (scalar JAX array)
+    activation  : activation function (static — one compiled version per fn)
+    norm        : "L2" | "H1" | "H2"
+    lambda_sob  : weight for ‖∇r‖² term (H1 and H2)
+    lambda_sob2 : weight for ‖H_r‖²_F term (H2 only)
 
-    dim=1:
-      - PDE residual over interior (x,t)
-      - IC: u(x,0)=sin(pi x) (soft)
-      - IC: u_t(x,0)=0 (soft)
-
-    dim=2 (time-marching flavor):
-      - PDE residual over interior (x,y,t) in window
-      - IC at t=t0:
-          if prev_model is None: match (u0_fn, v0_fn)
-          else: match (prev_model, u_t(prev_model)) with stop_gradient
-
-    Inputs for dim=2:
-      - y_int, y_ic required
-      - t_ic should be filled with t0 (shape (N_ic,1))
-      - prev_model optional
-      - u0_fn, v0_fn required if prev_model is None
-      - t0 required (float)
+    Returns
+    -------
+    (total_loss, components_dict)
+    components_dict always has keys "pde" and "ic_ut".
+    H1 adds "sobolev"; H2 adds "sobolev" and "sobolev2".
     """
+    t0 = jnp.zeros(())
+
+    # --- PDE term ---
     if norm == "L2":
-        return loss_l2(
-            model, x_int, t_int, x_ic, t_ic,
-            c=c, lambda_ic=lambda_ic, dim=dim,
-            y_int=y_int, y_ic=y_ic, prev_model=prev_model,
-            u0_fn=u0_fn, v0_fn=v0_fn, t0=t0,
-        )
-    elif norm == "Sobolev":
-        return loss_sobolev(
-            model, x_int, t_int, x_ic, t_ic,
-            c=c, lambda_ic=lambda_ic, dim=dim, lambda_sob=lambda_sob,
-            y_int=y_int, y_ic=y_ic, prev_model=prev_model,
-            u0_fn=u0_fn, v0_fn=v0_fn, t0=t0,
-        )
+        loss_pde, extra = pde_terms_l2(params, x_int, t_int, c, activation)
+    elif norm == "H1":
+        loss_pde, extra = pde_terms_h1(params, x_int, t_int, c, activation)
+    elif norm == "H2":
+        loss_pde, extra = pde_terms_h2(params, x_int, t_int, c, activation)
     else:
-        raise ValueError(f"norm must be 'L2' or 'Sobolev', got {norm!r}")
+        raise ValueError(f"norm must be 'L2', 'H1', or 'H2', got {norm!r}")
+
+    # --- IC velocity term: u_t(x, 0) = 0 ---
+    u_t_ic = jax.vmap(lambda xi: _u_t(params, xi, t0, activation))(x_ic)
+    loss_ic_ut = jnp.mean(u_t_ic**2)
+
+    # --- Total ---
+    loss_total = loss_pde + lambda_ic * loss_ic_ut
+    if "sobolev" in extra:
+        loss_total = loss_total + lambda_sob * extra["sobolev"]
+    if "sobolev2" in extra:
+        loss_total = loss_total + lambda_sob2 * extra["sobolev2"]
+
+    components = {"pde": loss_pde, "ic_ut": loss_ic_ut, **extra}
+    return loss_total, components
+
+
+def loss_scalar(
+    params,
+    x_int,
+    t_int,
+    x_ic,
+    c,
+    lambda_ic,
+    activation,
+    *,
+    norm="L2",
+    lambda_sob=1.0,
+    lambda_sob2=1.0,
+):
+    """Scalar wrapper — pass to jax.grad or optax's value_and_grad_from_state."""
+    loss, _ = loss_fn(
+        params, x_int, t_int, x_ic, c, lambda_ic, activation,
+        norm=norm, lambda_sob=lambda_sob, lambda_sob2=lambda_sob2,
+    )
+    return loss
