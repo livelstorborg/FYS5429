@@ -123,6 +123,7 @@ def subplot_3d_surfaces(
     ylabel="t",
     colorbar_label="Error",
     suptitle="3D Surface Plots",
+    title_fontsize=18,
     show=False,
     savefig=False,
     filepath=None,
@@ -169,7 +170,7 @@ def subplot_3d_surfaces(
     fig, axes = plt.subplots(
         1,
         n_plots,
-        figsize=(6.25 * n_plots, 6),
+        figsize=(8 * n_plots, 7),
         subplot_kw={"projection": "3d"},
         gridspec_kw={"wspace": 0.1},
     )
@@ -182,45 +183,39 @@ def subplot_3d_surfaces(
         x = fig_data['x']
         t = fig_data['t']
         U = fig_data['U']
-        
+
         X, T = np.meshgrid(x, t)
         surf = ax.plot_surface(X, T, U, cmap=cmap, edgecolor="none", alpha=0.9)
         ax.view_init(elev=elev, azim=az)
         ax.grid(alpha=0.3)
-        
+
         if title:
-            ax.set_title(title, fontsize=14, pad=10)
+            ax.set_title(title, fontsize=title_fontsize, y=0.98, fontweight="bold")
 
         # Labels
         ax.set_xlabel(xlabel, fontsize=12)
         ax.set_ylabel(ylabel, fontsize=12)
 
         # Z-axis handling
-        if idx == 0:
-            # First subplot: show z-ticks + numbers + rotate them
-            ax.tick_params(axis="z", labelsize=10)
-            for label in ax.get_zticklabels():
-                label.set_rotation(45)
-                label.set_fontsize(10)
-        else:
-            # Other subplots: keep ticks but remove numbers
-            zticks = ax.get_zticks()
-            ax.set_zticks(zticks)
-            ax.set_zticklabels(["" ] * len(zticks))
+        ax.tick_params(axis="z", labelsize=10)
+        for label in ax.get_zticklabels():
+            label.set_rotation(45)
+            label.set_fontsize(10)
 
         # Set tick sizes on x/t axis
         ax.tick_params(axis="x", labelsize=10)
         ax.tick_params(axis="y", labelsize=10)
 
-    # Shared colorbar
-    cbar = fig.colorbar(surf, ax=axes, shrink=0.5, aspect=20, pad=0.02)
-    cbar.set_label(colorbar_label, fontsize=12)
-    cbar.ax.tick_params(labelsize=10)
+        # Per-subplot colorbar
+        cbar = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=20, pad=0.1)
+        cbar.set_label(colorbar_label, fontsize=12)
+        cbar.ax.tick_params(labelsize=10)
 
-    fig.suptitle(suptitle, fontsize=22, fontweight="bold", y=0.98)
-    
+    fig.suptitle(suptitle, fontsize=22, fontweight="bold", y=0.95)
+
     # Save if requested
     if savefig and filepath:
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(filepath, dpi=300, bbox_inches="tight", pad_inches=0.1)
     
     # Show if requested
@@ -522,11 +517,11 @@ def plot_2d_snapshots(field, t_indices, t_labels, title, cmap="viridis",
     filepath    : str, save path if savefig=True
     """
     n = len(t_indices)
-    fig, axes = plt.subplots(1, n, figsize=(4 * n, 5), constrained_layout=True)
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 6), constrained_layout=True)
     if n == 1:
         axes = [axes]
 
-    fig.suptitle(title, fontsize=16, fontweight="bold", y=0.92)
+    fig.suptitle(title, fontsize=22, fontweight="bold", y=0.93)
 
     for ax, idx, t_val in zip(axes, t_indices, t_labels):
         snapshot = np.array(field[idx])
@@ -537,7 +532,7 @@ def plot_2d_snapshots(field, t_indices, t_labels, title, cmap="viridis",
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.01)
         ax.set_xlabel("x", fontsize=11)
         ax.set_ylabel("y", fontsize=11)
-        ax.set_title(rf"$\mathbf{{t={t_val:.2f}}}$", fontsize=11)
+        ax.set_title(rf"$\mathbf{{t={t_val:.2f}}}$", fontsize=18)
 
     if savefig and filepath is not None:
         Path(filepath).parent.mkdir(parents=True, exist_ok=True)
