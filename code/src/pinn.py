@@ -159,6 +159,7 @@ def train_pinn(
     v0_fn=None,
     norm="L2",
     lambda_sob=1.0,
+    lr_schedule="exponential",
 ):
     """
     Train PINN for wave equation in 1D or 2D.
@@ -249,11 +250,15 @@ def train_pinn(
             }
             return model, losses, loss_components
 
-        schedule = optax.exponential_decay(
-            init_value=lr,
-            transition_steps=1000,
-            decay_rate=0.95,
-        )
+        if lr_schedule == "cosine":
+            total_steps_1d = steps_per_window * n_windows if steps_per_window is not None else steps
+            schedule = optax.cosine_decay_schedule(init_value=lr, decay_steps=total_steps_1d)
+        else:
+            schedule = optax.exponential_decay(
+                init_value=lr,
+                transition_steps=1000,
+                decay_rate=0.95,
+            )
 
         if not hasattr(optax, optimizer):
             raise ValueError(
@@ -378,11 +383,15 @@ def train_pinn(
             f"Available: adam, adamw, sgd, rmsprop, nadam"
         )
 
-    schedule_2d = optax.exponential_decay(
-        init_value=lr,
-        transition_steps=1000,
-        decay_rate=0.95,
-    )
+    if lr_schedule == "cosine":
+        total_steps_2d = steps_per_window * n_windows if steps_per_window is not None else steps
+        schedule_2d = optax.cosine_decay_schedule(init_value=lr, decay_steps=total_steps_2d)
+    else:
+        schedule_2d = optax.exponential_decay(
+            init_value=lr,
+            transition_steps=1000,
+            decay_rate=0.95,
+        )
     tx = optax.chain(
         optax.clip_by_global_norm(grad_clip if grad_clip is not None else 1e9),
         getattr(optax, optimizer)(schedule_2d),
@@ -418,7 +427,7 @@ def train_pinn(
         return model, opt, key, loss, comps
 
     print(f"Training PINN for 2D wave equation (c={c}, T={T})...")
-    print("Optimizer: adam (time-marching)")
+    print(f"Optimizer: {optimizer} (time-marching)")
     print(f"Architecture: {layers}")
     print(f"Windows: {n_windows}, steps_per_window: {steps_per_window}")
     print(f"N_int: {N_int}, N_ic: {N_ic}, lambda_ic: {lambda_ic}, lr: {lr}")

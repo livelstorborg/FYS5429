@@ -43,6 +43,7 @@ def run_architecture_sweep(
     Ny_eval=None,
     Nt_eval=100,
     optimizer="adam",
+    lr_schedule="exponential",
     save_to_csv=False,
     use_pre_computed=False,
     data_dir="data",
@@ -83,7 +84,7 @@ def run_architecture_sweep(
         for L in num_hidden_layers:
             for W in hidden_widths:
                 print(f"Layers: {L}, Nodes: {W}")
-                layers = [2] + [W] * L + [1]
+                layers = [dim + 1] + [W] * L + [1]
                 activations = [act_fn] * (len(layers) - 2)
 
                 L2_all = []
@@ -109,6 +110,7 @@ def run_architecture_sweep(
                         lambda_sob=lambda_sob,
                         seed=seed,
                         optimizer=optimizer,
+                        lr_schedule=lr_schedule,
                     )
 
                     x_eval = jnp.linspace(0, 1, Nx_eval)
