@@ -15,13 +15,15 @@ import flax.nnx as nnx
 #                       Single 3D surface
 # =============================================================================
 def plot_3d_surface(
-    x, 
-    t, 
-    U, 
-    title="", 
-    elev=30, 
+    x,
+    t,
+    U,
+    title="",
+    elev=30,
     azim=-135,
     cmap="viridis",
+    xlabel="x",
+    ylabel="t",
     colorbar_label="u(x, t)",
     show=False,
     savefig=False,
@@ -67,8 +69,8 @@ def plot_3d_surface(
     surf = ax.plot_surface(X, T, U, cmap=cmap, edgecolor="none", alpha=0.8)
 
     # Labels
-    ax.set_xlabel("x", fontsize=16, labelpad=12)
-    ax.set_ylabel("t", fontsize=16, labelpad=12)
+    ax.set_xlabel(xlabel, fontsize=16, labelpad=12)
+    ax.set_ylabel(ylabel, fontsize=16, labelpad=12)
     ax.set_zlabel(colorbar_label, fontsize=16, labelpad=12)
     ax.set_title(title, fontsize=18, fontweight="bold", pad=5)
 
@@ -117,6 +119,8 @@ def subplot_3d_surfaces(
     elev=20,
     azims=None,
     cmap="viridis",
+    xlabel="x",
+    ylabel="t",
     colorbar_label="Error",
     suptitle="3D Surface Plots",
     show=False,
@@ -188,8 +192,8 @@ def subplot_3d_surfaces(
             ax.set_title(title, fontsize=14, pad=10)
 
         # Labels
-        ax.set_xlabel("x", fontsize=12)
-        ax.set_ylabel("t", fontsize=12)
+        ax.set_xlabel(xlabel, fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
 
         # Z-axis handling
         if idx == 0:

@@ -78,6 +78,46 @@ def create_grid(Nx, Ny=None, T=1.0, c=1.0, cfl=0.5, dim=1):
 
 
 # -----------------------------------------------------------------------------
+# Metamaterial wave-speed helpers
+# -----------------------------------------------------------------------------
+def _smooth_indicator(coords, z, eps, delta):
+    """
+    Smooth indicator for a single particle at position z.
+    coords : tuple of arrays, one per spatial dimension
+    z      : tuple of scalars, particle centre coordinates
+    eps    : particle radius
+    delta  : interface width
+    """
+    dist = jnp.sqrt(sum((ci - zi) ** 2 for ci, zi in zip(coords, z)) + 1e-30)
+    return 0.5 * (1.0 + jnp.tanh((eps / 2 - dist) / delta))
+
+
+def make_c_fn(particles, c0, eps, delta, s_fn):
+    """
+    Return a wave-speed callable c(*spatial_coords, t) for a metamaterial
+    with the given particle centres.  Works for any spatial dimension.
+
+    Parameters
+    ----------
+    particles : list of tuples
+        Particle centre coordinates, e.g. [(0.5,)] in 1D or [(0.5, 0.5)] in 2D.
+    c0    : float, background wave speed
+    eps   : float, particle radius
+    delta : float, interface width
+    s_fn  : callable t -> scalar, modulation function s(t)
+    """
+    def c_fn(*args):
+        *spatial, t_scalar = args
+        coords = tuple(spatial)
+        eta = (s_fn(t_scalar) / eps**2) * sum(
+            _smooth_indicator(coords, z, eps, delta) for z in particles
+        )
+        n2 = jnp.maximum(1.0 + eta, 0.1)
+        return c0 / jnp.sqrt(n2)
+    return c_fn
+
+
+# -----------------------------------------------------------------------------
 # Finite Difference Solver
 # -----------------------------------------------------------------------------
 def fd_solve(x, t, dx, dt, c=1.0, y=None, dy=None, u0=None, v0=None, f_fn=None, dim=1):
@@ -122,19 +162,22 @@ def _fd_solve_1d_const(x, t, dx, dt, c):
     Nt = len(t) - 1
     r = (c * dt / dx) ** 2
 
-    u = jnp.zeros((Nt + 1, Nx + 1))
-    u = u.at[0, :].set(jnp.sin(jnp.pi * x))
-    u = u.at[1, 1:Nx].set(
-        u[0, 1:Nx] + 0.5 * r * (u[0, 2 : Nx + 1] - 2 * u[0, 1:Nx] + u[0, 0 : Nx - 1])
+    u0 = jnp.sin(jnp.pi * x)
+    u1 = jnp.zeros(Nx + 1).at[1:Nx].set(
+        u0[1:Nx] + 0.5 * r * (u0[2:Nx + 1] - 2 * u0[1:Nx] + u0[0:Nx - 1])
     )
 
-    for n in range(1, Nt):
-        u = u.at[n + 1, 1:Nx].set(
-            2 * u[n, 1:Nx]
-            - u[n - 1, 1:Nx]
-            + r * (u[n, 2 : Nx + 1] - 2 * u[n, 1:Nx] + u[n, 0 : Nx - 1])
+    def step(carry, _):
+        u_prev, u_curr = carry
+        u_next = jnp.zeros(Nx + 1).at[1:Nx].set(
+            2 * u_curr[1:Nx]
+            - u_prev[1:Nx]
+            + r * (u_curr[2:Nx + 1] - 2 * u_curr[1:Nx] + u_curr[0:Nx - 1])
         )
-    return u
+        return (u_curr, u_next), u_next
+
+    _, u_rest = jax.lax.scan(step, (u0, u1), None, length=Nt - 1)
+    return jnp.concatenate([u0[None], u1[None], u_rest], axis=0)
 
 
 def _fd_solve_2d_const(x, t, dx, dt, y, dy, c):
@@ -145,28 +188,25 @@ def _fd_solve_2d_const(x, t, dx, dt, y, dy, c):
     ry = (c * dt / dy) ** 2
 
     X, Y = jnp.meshgrid(x, y, indexing="ij")
-    u = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
-    u = u.at[0, :, :].set(jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y))
-    u = u.at[1, 1:Nx, 1:Ny].set(
-        u[0, 1:Nx, 1:Ny]
-        + 0.5
-        * rx
-        * (u[0, 2 : Nx + 1, 1:Ny] - 2 * u[0, 1:Nx, 1:Ny] + u[0, 0 : Nx - 1, 1:Ny])
-        + 0.5
-        * ry
-        * (u[0, 1:Nx, 2 : Ny + 1] - 2 * u[0, 1:Nx, 1:Ny] + u[0, 1:Nx, 0 : Ny - 1])
+    u0 = jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
+    u1 = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+        u0[1:Nx, 1:Ny]
+        + 0.5 * rx * (u0[2:Nx + 1, 1:Ny] - 2 * u0[1:Nx, 1:Ny] + u0[0:Nx - 1, 1:Ny])
+        + 0.5 * ry * (u0[1:Nx, 2:Ny + 1] - 2 * u0[1:Nx, 1:Ny] + u0[1:Nx, 0:Ny - 1])
     )
 
-    for n in range(1, Nt):
-        u = u.at[n + 1, 1:Nx, 1:Ny].set(
-            2 * u[n, 1:Nx, 1:Ny]
-            - u[n - 1, 1:Nx, 1:Ny]
-            + rx
-            * (u[n, 2 : Nx + 1, 1:Ny] - 2 * u[n, 1:Nx, 1:Ny] + u[n, 0 : Nx - 1, 1:Ny])
-            + ry
-            * (u[n, 1:Nx, 2 : Ny + 1] - 2 * u[n, 1:Nx, 1:Ny] + u[n, 1:Nx, 0 : Ny - 1])
+    def step(carry, _):
+        u_prev, u_curr = carry
+        u_next = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            2 * u_curr[1:Nx, 1:Ny]
+            - u_prev[1:Nx, 1:Ny]
+            + rx * (u_curr[2:Nx + 1, 1:Ny] - 2 * u_curr[1:Nx, 1:Ny] + u_curr[0:Nx - 1, 1:Ny])
+            + ry * (u_curr[1:Nx, 2:Ny + 1] - 2 * u_curr[1:Nx, 1:Ny] + u_curr[1:Nx, 0:Ny - 1])
         )
-    return u
+        return (u_curr, u_next), u_next
+
+    _, u_rest = jax.lax.scan(step, (u0, u1), None, length=Nt - 1)
+    return jnp.concatenate([u0[None], u1[None], u_rest], axis=0)
 
 
 def _fd_solve_1d_var(x, t, dx, dt, c_fn, u0, v0, f_fn):
@@ -179,31 +219,35 @@ def _fd_solve_1d_var(x, t, dx, dt, c_fn, u0, v0, f_fn):
     Nt = len(t) - 1
     x_half = x[:-1] + 0.5 * dx  # shape (Nx,)
 
-    u = jnp.zeros((Nt + 1, Nx + 1))
-    u = u.at[0].set(u0)
-
     def _lap(u_vec, tn):
         c_r = c_fn(x_half[1:Nx], tn)
-        c_l = c_fn(x_half[0 : Nx - 1], tn)
+        c_l = c_fn(x_half[0:Nx - 1], tn)
         return (
-            c_r**2 * (u_vec[2 : Nx + 1] - u_vec[1:Nx])
-            - c_l**2 * (u_vec[1:Nx] - u_vec[0 : Nx - 1])
+            c_r**2 * (u_vec[2:Nx + 1] - u_vec[1:Nx])
+            - c_l**2 * (u_vec[1:Nx] - u_vec[0:Nx - 1])
         ) / dx**2
 
-    lap0 = _lap(u[0], t[0])
+    lap0 = _lap(u0, t[0])
     f0 = f_fn(x[1:Nx], t[0]) if f_fn is not None else jnp.zeros(Nx - 1)
 
     if v0 is None:
-        u1 = u[0, 1:Nx] + 0.5 * dt**2 * (lap0 + f0)
+        u1 = jnp.zeros(Nx + 1).at[1:Nx].set(u0[1:Nx] + 0.5 * dt**2 * (lap0 + f0))
     else:
-        u1 = u[0, 1:Nx] + dt * v0[1:Nx] + 0.5 * dt**2 * (lap0 + f0)
-    u = u.at[1, 1:Nx].set(u1)
+        u1 = jnp.zeros(Nx + 1).at[1:Nx].set(
+            u0[1:Nx] + dt * v0[1:Nx] + 0.5 * dt**2 * (lap0 + f0)
+        )
 
-    for n in range(1, Nt):
-        lap = _lap(u[n], t[n])
-        fn = f_fn(x[1:Nx], t[n]) if f_fn is not None else jnp.zeros(Nx - 1)
-        u = u.at[n + 1, 1:Nx].set(2 * u[n, 1:Nx] - u[n - 1, 1:Nx] + dt**2 * (lap + fn))
-    return u
+    def step(carry, tn):
+        u_prev, u_curr = carry
+        lap = _lap(u_curr, tn)
+        fn = f_fn(x[1:Nx], tn) if f_fn is not None else jnp.zeros(Nx - 1)
+        u_next = jnp.zeros(Nx + 1).at[1:Nx].set(
+            2 * u_curr[1:Nx] - u_prev[1:Nx] + dt**2 * (lap + fn)
+        )
+        return (u_curr, u_next), u_next
+
+    _, u_rest = jax.lax.scan(step, (u0, u1), t[1:Nt])
+    return jnp.concatenate([u0[None], u1[None], u_rest], axis=0)
 
 
 def _fd_solve_2d_var(x, t, dx, dt, y, dy, c_fn, u0, v0, f_fn):
@@ -223,10 +267,8 @@ def _fd_solve_2d_var(x, t, dx, dt, y, dy, c_fn, u0, v0, f_fn):
     Xl, Yl = jnp.meshgrid(x_half[0:Nx - 1], y[1:Ny], indexing="ij")
     Xu, Yu = jnp.meshgrid(x[1:Nx], y_half[1:Ny], indexing="ij")
     Xd, Yd = jnp.meshgrid(x[1:Nx], y_half[0:Ny - 1], indexing="ij")
-    Xn, Yn = jnp.meshgrid(x[1:Nx], y[1:Ny], indexing="ij")
-
-    u = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
-    u = u.at[0].set(u0)
+    if f_fn is not None:
+        Xn, Yn = jnp.meshgrid(x[1:Nx], y[1:Ny], indexing="ij")
 
     def _lap(u_slice, tn):
         c2_r = c_fn(Xr, Yr, tn) ** 2
@@ -234,29 +276,36 @@ def _fd_solve_2d_var(x, t, dx, dt, y, dy, c_fn, u0, v0, f_fn):
         c2_u = c_fn(Xu, Yu, tn) ** 2
         c2_d = c_fn(Xd, Yd, tn) ** 2
         return (
-            c2_r * (u_slice[2 : Nx + 1, 1:Ny] - u_slice[1:Nx, 1:Ny])
-            - c2_l * (u_slice[1:Nx, 1:Ny] - u_slice[0 : Nx - 1, 1:Ny])
+            c2_r * (u_slice[2:Nx + 1, 1:Ny] - u_slice[1:Nx, 1:Ny])
+            - c2_l * (u_slice[1:Nx, 1:Ny] - u_slice[0:Nx - 1, 1:Ny])
         ) / dx**2 + (
-            c2_u * (u_slice[1:Nx, 2 : Ny + 1] - u_slice[1:Nx, 1:Ny])
-            - c2_d * (u_slice[1:Nx, 1:Ny] - u_slice[1:Nx, 0 : Ny - 1])
+            c2_u * (u_slice[1:Nx, 2:Ny + 1] - u_slice[1:Nx, 1:Ny])
+            - c2_d * (u_slice[1:Nx, 1:Ny] - u_slice[1:Nx, 0:Ny - 1])
         ) / dy**2
 
-    lap0 = _lap(u[0], t[0])
+    lap0 = _lap(u0, t[0])
     f0 = f_fn(Xn, Yn, t[0]) if f_fn is not None else jnp.zeros((Nx - 1, Ny - 1))
 
     if v0 is None:
-        u1 = u[0, 1:Nx, 1:Ny] + 0.5 * dt**2 * (lap0 + f0)
-    else:
-        u1 = u[0, 1:Nx, 1:Ny] + dt * v0[1:Nx, 1:Ny] + 0.5 * dt**2 * (lap0 + f0)
-    u = u.at[1, 1:Nx, 1:Ny].set(u1)
-
-    for n in range(1, Nt):
-        lap = _lap(u[n], t[n])
-        fn = f_fn(Xn, Yn, t[n]) if f_fn is not None else jnp.zeros((Nx - 1, Ny - 1))
-        u = u.at[n + 1, 1:Nx, 1:Ny].set(
-            2 * u[n, 1:Nx, 1:Ny] - u[n - 1, 1:Nx, 1:Ny] + dt**2 * (lap + fn)
+        u1 = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            u0[1:Nx, 1:Ny] + 0.5 * dt**2 * (lap0 + f0)
         )
-    return u
+    else:
+        u1 = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            u0[1:Nx, 1:Ny] + dt * v0[1:Nx, 1:Ny] + 0.5 * dt**2 * (lap0 + f0)
+        )
+
+    def step(carry, tn):
+        u_prev, u_curr = carry
+        lap = _lap(u_curr, tn)
+        fn = f_fn(Xn, Yn, tn) if f_fn is not None else jnp.zeros((Nx - 1, Ny - 1))
+        u_next = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            2 * u_curr[1:Nx, 1:Ny] - u_prev[1:Nx, 1:Ny] + dt**2 * (lap + fn)
+        )
+        return (u_curr, u_next), u_next
+
+    _, u_rest = jax.lax.scan(step, (u0, u1), t[1:Nt])
+    return jnp.concatenate([u0[None], u1[None], u_rest], axis=0)
 
 
 # -----------------------------------------------------------------------------
@@ -316,29 +365,28 @@ def _fem_solve_1d_const(x, t, dx, dt, c):
 
     coeff = (c * dt) ** 2 / M_lumped
 
-    u = jnp.zeros((Nt + 1, Nx + 1))
-    u = u.at[0, :].set(jnp.sin(jnp.pi * x))
-    u_1 = jnp.zeros(Nx + 1)
-    for i in range(1, Nx):
-        st = K_diag[i] * u[0, i] + K_off[i - 1] * u[0, i - 1] + K_off[i] * u[0, i + 1]
-        u_1 = u_1.at[i].set(u[0, i] - 0.5 * coeff[i] * st)
-    u = u.at[1, :].set(u_1)
-    u = u.at[1, 0].set(0.0)
-    u = u.at[1, Nx].set(0.0)
+    u0 = jnp.sin(jnp.pi * x)
+    st0 = (
+        K_diag[1:Nx] * u0[1:Nx]
+        + K_off[0:Nx - 1] * u0[0:Nx - 1]
+        + K_off[1:Nx] * u0[2:Nx + 1]
+    )
+    u1 = jnp.zeros(Nx + 1).at[1:Nx].set(u0[1:Nx] - 0.5 * coeff[1:Nx] * st0)
 
-    for n in range(1, Nt):
-        u_new = jnp.zeros(Nx + 1)
-        for i in range(1, Nx):
-            st = (
-                K_diag[i] * u[n, i]
-                + K_off[i - 1] * u[n, i - 1]
-                + K_off[i] * u[n, i + 1]
-            )
-            u_new = u_new.at[i].set(2 * u[n, i] - u[n - 1, i] - coeff[i] * st)
-        u = u.at[n + 1, :].set(u_new)
-        u = u.at[n + 1, 0].set(0.0)
-        u = u.at[n + 1, Nx].set(0.0)
-    return u
+    def step(carry, _):
+        u_prev, u_curr = carry
+        st = (
+            K_diag[1:Nx] * u_curr[1:Nx]
+            + K_off[0:Nx - 1] * u_curr[0:Nx - 1]
+            + K_off[1:Nx] * u_curr[2:Nx + 1]
+        )
+        u_next = jnp.zeros(Nx + 1).at[1:Nx].set(
+            2 * u_curr[1:Nx] - u_prev[1:Nx] - coeff[1:Nx] * st
+        )
+        return (u_curr, u_next), u_next
+
+    _, u_rest = jax.lax.scan(step, (u0, u1), None, length=Nt - 1)
+    return jnp.concatenate([u0[None], u1[None], u_rest], axis=0)
 
 
 def _fem_solve_2d_const(
@@ -373,70 +421,46 @@ def _fem_solve_2d_const(
     if u0 is None:
         X, Y = jnp.meshgrid(x, y, indexing="ij")
         u0 = jnp.sin(jnp.pi * X) * jnp.sin(jnp.pi * Y)
-    # --------------------------------------------------
-    # Lumped mass (Q1 elements on uniform grid)
-    # interior node mass = dx*dy
-    # --------------------------------------------------
-    M_inv = 1.0 / (dx * dy)
 
-    # --------------------------------------------------
-    # Storage
-    # --------------------------------------------------
-    u = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
-    u = u.at[0].set(u0)
-
-    # --------------------------------------------------
-    # FEM stiffness action (Ku)
-    # equivalent to assembled stiffness matrix action
-    # --------------------------------------------------
     def stiffness(u_slice):
-        lap = (
-            u_slice[2 : Nx + 1, 1:Ny]
+        return (
+            u_slice[2:Nx + 1, 1:Ny]
             - 2 * u_slice[1:Nx, 1:Ny]
-            + u_slice[0 : Nx - 1, 1:Ny]
+            + u_slice[0:Nx - 1, 1:Ny]
         ) / dx**2 + (
-            u_slice[1:Nx, 2 : Ny + 1]
+            u_slice[1:Nx, 2:Ny + 1]
             - 2 * u_slice[1:Nx, 1:Ny]
-            + u_slice[1:Nx, 0 : Ny - 1]
+            + u_slice[1:Nx, 0:Ny - 1]
         ) / dy**2
-        return lap
-
-    # --------------------------------------------------
-    # First step (Taylor expansion)
-    # --------------------------------------------------
-    rhs0 = c**2 * stiffness(u[0])
 
     if f_fn is not None:
         X, Y = jnp.meshgrid(x[1:Nx], y[1:Ny], indexing="ij")
+
+    rhs0 = c**2 * stiffness(u0)
+    if f_fn is not None:
         rhs0 = rhs0 + f_fn(X, Y, t[0])
 
     if v0 is None:
-        u1 = u[0, 1:Nx, 1:Ny] + 0.5 * dt**2 * rhs0
+        u1 = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            u0[1:Nx, 1:Ny] + 0.5 * dt**2 * rhs0
+        )
     else:
-        u1 = u[0, 1:Nx, 1:Ny] + dt * v0[1:Nx, 1:Ny] + 0.5 * dt**2 * rhs0
+        u1 = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            u0[1:Nx, 1:Ny] + dt * v0[1:Nx, 1:Ny] + 0.5 * dt**2 * rhs0
+        )
 
-    u = u.at[1, 1:Nx, 1:Ny].set(u1)
-
-    # --------------------------------------------------
-    # Time stepping
-    # --------------------------------------------------
-    for n in range(1, Nt):
-        rhs = c**2 * stiffness(u[n])
-
+    def step(carry, tn):
+        u_prev, u_curr = carry
+        rhs = c**2 * stiffness(u_curr)
         if f_fn is not None:
-            rhs = rhs + f_fn(X, Y, t[n])
+            rhs = rhs + f_fn(X, Y, tn)
+        u_next = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            2 * u_curr[1:Nx, 1:Ny] - u_prev[1:Nx, 1:Ny] + dt**2 * rhs
+        )
+        return (u_curr, u_next), u_next
 
-        u_next = 2 * u[n, 1:Nx, 1:Ny] - u[n - 1, 1:Nx, 1:Ny] + dt**2 * rhs
-
-        u = u.at[n + 1, 1:Nx, 1:Ny].set(u_next)
-
-        # Dirichlet BCs (zero)
-        u = u.at[n + 1, 0, :].set(0.0)
-        u = u.at[n + 1, Nx, :].set(0.0)
-        u = u.at[n + 1, :, 0].set(0.0)
-        u = u.at[n + 1, :, Ny].set(0.0)
-
-    return u
+    _, u_rest = jax.lax.scan(step, (u0, u1), t[1:Nt])
+    return jnp.concatenate([u0[None], u1[None], u_rest], axis=0)
 
 
 def _fem_solve_1d_var(x, t, dx, dt, c_fn, u0, v0, f_fn):
@@ -448,31 +472,35 @@ def _fem_solve_1d_var(x, t, dx, dt, c_fn, u0, v0, f_fn):
     Nt = len(t) - 1
     x_mid = x[:-1] + 0.5 * dx  # shape (Nx,)
 
-    u = jnp.zeros((Nt + 1, Nx + 1))
-    u = u.at[0].set(u0)
-
     def _stiffness_rhs(u_vec, tn):
         c2 = c_fn(x_mid, tn) ** 2
         Ku = (
-            c2[1:Nx] * (u_vec[1:Nx] - u_vec[2 : Nx + 1])
-            + c2[0 : Nx - 1] * (u_vec[1:Nx] - u_vec[0 : Nx - 1])
+            c2[1:Nx] * (u_vec[1:Nx] - u_vec[2:Nx + 1])
+            + c2[0:Nx - 1] * (u_vec[1:Nx] - u_vec[0:Nx - 1])
         ) / dx
         return -Ku / dx  # divide by lumped mass M_i = dx
 
-    rhs0 = _stiffness_rhs(u[0], t[0])
+    rhs0 = _stiffness_rhs(u0, t[0])
     f0 = f_fn(x[1:Nx], t[0]) if f_fn is not None else jnp.zeros(Nx - 1)
 
     if v0 is None:
-        u1 = u[0, 1:Nx] + 0.5 * dt**2 * (rhs0 + f0)
+        u1 = jnp.zeros(Nx + 1).at[1:Nx].set(u0[1:Nx] + 0.5 * dt**2 * (rhs0 + f0))
     else:
-        u1 = u[0, 1:Nx] + dt * v0[1:Nx] + 0.5 * dt**2 * (rhs0 + f0)
-    u = u.at[1, 1:Nx].set(u1)
+        u1 = jnp.zeros(Nx + 1).at[1:Nx].set(
+            u0[1:Nx] + dt * v0[1:Nx] + 0.5 * dt**2 * (rhs0 + f0)
+        )
 
-    for n in range(1, Nt):
-        rhs = _stiffness_rhs(u[n], t[n])
-        fn = f_fn(x[1:Nx], t[n]) if f_fn is not None else jnp.zeros(Nx - 1)
-        u = u.at[n + 1, 1:Nx].set(2 * u[n, 1:Nx] - u[n - 1, 1:Nx] + dt**2 * (rhs + fn))
-    return u
+    def step(carry, tn):
+        u_prev, u_curr = carry
+        rhs = _stiffness_rhs(u_curr, tn)
+        fn = f_fn(x[1:Nx], tn) if f_fn is not None else jnp.zeros(Nx - 1)
+        u_next = jnp.zeros(Nx + 1).at[1:Nx].set(
+            2 * u_curr[1:Nx] - u_prev[1:Nx] + dt**2 * (rhs + fn)
+        )
+        return (u_curr, u_next), u_next
+
+    _, u_rest = jax.lax.scan(step, (u0, u1), t[1:Nt])
+    return jnp.concatenate([u0[None], u1[None], u_rest], axis=0)
 
 
 def _fem_solve_2d_var(x, t, dx, dt, y, dy, c_fn, u0, v0, f_fn):
@@ -496,10 +524,8 @@ def _fem_solve_2d_var(x, t, dx, dt, y, dy, c_fn, u0, v0, f_fn):
     Xl, Yl = jnp.meshgrid(x_half[0:Nx - 1], y[1:Ny], indexing="ij")
     Xu, Yu = jnp.meshgrid(x[1:Nx], y_half[1:Ny], indexing="ij")
     Xd, Yd = jnp.meshgrid(x[1:Nx], y_half[0:Ny - 1], indexing="ij")
-    Xn, Yn = jnp.meshgrid(x[1:Nx], y[1:Ny], indexing="ij")
-
-    u = jnp.zeros((Nt + 1, Nx + 1, Ny + 1))
-    u = u.at[0].set(u0)
+    if f_fn is not None:
+        Xn, Yn = jnp.meshgrid(x[1:Nx], y[1:Ny], indexing="ij")
 
     def stiffness_rhs(u_slice, tn):
         c2_r = c_fn(Xr, Yr, tn) ** 2
@@ -507,33 +533,33 @@ def _fem_solve_2d_var(x, t, dx, dt, y, dy, c_fn, u0, v0, f_fn):
         c2_u = c_fn(Xu, Yu, tn) ** 2
         c2_d = c_fn(Xd, Yd, tn) ** 2
         return (
-            c2_r * (u_slice[2 : Nx + 1, 1:Ny] - u_slice[1:Nx, 1:Ny])
-            - c2_l * (u_slice[1:Nx, 1:Ny] - u_slice[0 : Nx - 1, 1:Ny])
+            c2_r * (u_slice[2:Nx + 1, 1:Ny] - u_slice[1:Nx, 1:Ny])
+            - c2_l * (u_slice[1:Nx, 1:Ny] - u_slice[0:Nx - 1, 1:Ny])
         ) / dx**2 + (
-            c2_u * (u_slice[1:Nx, 2 : Ny + 1] - u_slice[1:Nx, 1:Ny])
-            - c2_d * (u_slice[1:Nx, 1:Ny] - u_slice[1:Nx, 0 : Ny - 1])
+            c2_u * (u_slice[1:Nx, 2:Ny + 1] - u_slice[1:Nx, 1:Ny])
+            - c2_d * (u_slice[1:Nx, 1:Ny] - u_slice[1:Nx, 0:Ny - 1])
         ) / dy**2
 
-    rhs0 = stiffness_rhs(u[0], t[0])
+    rhs0 = stiffness_rhs(u0, t[0])
     f0 = f_fn(Xn, Yn, t[0]) if f_fn is not None else jnp.zeros((Nx - 1, Ny - 1))
 
     if v0 is None:
-        u1 = u[0, 1:Nx, 1:Ny] + 0.5 * dt**2 * (rhs0 + f0)
-    else:
-        u1 = u[0, 1:Nx, 1:Ny] + dt * v0[1:Nx, 1:Ny] + 0.5 * dt**2 * (rhs0 + f0)
-    u = u.at[1, 1:Nx, 1:Ny].set(u1)
-
-    for n in range(1, Nt):
-        rhs = stiffness_rhs(u[n], t[n])
-        if f_fn is not None:
-            rhs = rhs + f_fn(Xn, Yn, t[n])
-
-        u = u.at[n + 1, 1:Nx, 1:Ny].set(
-            2 * u[n, 1:Nx, 1:Ny] - u[n - 1, 1:Nx, 1:Ny] + dt**2 * rhs
+        u1 = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            u0[1:Nx, 1:Ny] + 0.5 * dt**2 * (rhs0 + f0)
         )
-        u = u.at[n + 1, 0, :].set(0.0)
-        u = u.at[n + 1, Nx, :].set(0.0)
-        u = u.at[n + 1, :, 0].set(0.0)
-        u = u.at[n + 1, :, Ny].set(0.0)
+    else:
+        u1 = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            u0[1:Nx, 1:Ny] + dt * v0[1:Nx, 1:Ny] + 0.5 * dt**2 * (rhs0 + f0)
+        )
 
-    return u
+    def step(carry, tn):
+        u_prev, u_curr = carry
+        rhs = stiffness_rhs(u_curr, tn)
+        fn = f_fn(Xn, Yn, tn) if f_fn is not None else jnp.zeros((Nx - 1, Ny - 1))
+        u_next = jnp.zeros((Nx + 1, Ny + 1)).at[1:Nx, 1:Ny].set(
+            2 * u_curr[1:Nx, 1:Ny] - u_prev[1:Nx, 1:Ny] + dt**2 * (rhs + fn)
+        )
+        return (u_curr, u_next), u_next
+
+    _, u_rest = jax.lax.scan(step, (u0, u1), t[1:Nt])
+    return jnp.concatenate([u0[None], u1[None], u_rest], axis=0)
