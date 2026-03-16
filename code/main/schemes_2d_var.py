@@ -15,8 +15,6 @@ from src.pde import fd_solve, fem_solve, u_exact, create_grid
 from src.pinn import train_pinn
 from src.experiment import absolute_error, relative_error
 from src.plotting import (
-    plot_solution_at_t,
-    plot_error_at_t,
     plot_3d_surface,
     subplot_3d_surfaces,
 )

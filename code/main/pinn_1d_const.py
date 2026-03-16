@@ -14,8 +14,6 @@ from src.pde import fd_solve, fem_solve, u_exact, u_exact_1d, create_grid
 from src.pinn import train_pinn
 from src.experiment import absolute_error, relative_error, run_architecture_sweep
 from src.plotting import (
-    plot_solution_at_t,
-    plot_scheme_errors_at_t,
     plot_3d_surface,
     subplot_3d_surfaces,
     plot_loss,
@@ -83,7 +81,7 @@ for opt in opt_names:
             activation=act,
             show=True,
             savefig=True,
-            filepath=str(Path(__file__).parent.parent / "figs" / "1d_const" / f"heatmap_{opt}_{act}.pdf"),
+            filepath=str(Path(__file__).parent.parent / "figs" / "1d_const" / "heatmaps_1d_const" / f"heatmap_{opt}_{act}.pdf"),
         )
 
 

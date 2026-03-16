@@ -10,16 +10,12 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import jax.nn as jnn
 import numpy as np
-import matplotlib.pyplot as plt
 
 from src.pde import fd_solve, fem_solve, u_exact, create_grid
 from src.pinn import train_pinn
 from src.experiment import absolute_error, relative_error
 from src.plotting import (
-    plot_solution_at_t,
-    plot_error_at_t,
-    plot_3d_surface,
-    subplot_3d_surfaces,
+    plot_2d_snapshots,
 )
 
 # Parameters
@@ -51,34 +47,20 @@ t_indices = [idx_t1, idx_t2, idx_t3, idx_t4]
 t_labels = [t1_eval, t2_eval, t3_eval, t4_eval]
 
 
-def plot_error_heatmaps_2d(u_scheme, u_exact, t_indices, t_labels, label, savepath):
-    n = len(t_indices)
-    fig, axes = plt.subplots(1, n, figsize=(4 * n, 5), constrained_layout=True)
-    fig.suptitle(
-        rf"$\mathbf{{2D}}$ Wave Equation — Absolute Error ({label})",
-        fontsize=16,
-        fontweight="bold",
-        y=0.92,
-    )
+fd_error = np.abs(np.array(u_fd) - np.array(u_exact))
+fem_error = np.abs(np.array(u_fem) - np.array(u_exact))
 
-    for col, (idx, t_val) in enumerate(zip(t_indices, t_labels)):
-        ax = axes[col]
-        err = np.abs(np.array(u_scheme[idx]) - np.array(u_exact[idx]))
-        im = ax.imshow(
-            err.T, origin="lower", extent=[0, 1, 0, 1], cmap="viridis", aspect="equal"
-        )
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.01)
-        ax.set_xlabel("x", fontsize=11)
-        ax.set_ylabel("y", fontsize=11)
-        ax.set_title(rf"$\mathbf{{t={t_val:.2f}}}$", fontsize=11)
-
-    plt.savefig(savepath, dpi=300, bbox_inches="tight")
-    plt.show()
-
-
-plot_error_heatmaps_2d(
-    u_fd, u_exact, t_indices, t_labels, "FD", "figs/schemes/fd_error_heatmaps_2d_const.pdf"
+plot_2d_snapshots(
+    fd_error, t_indices, t_labels,
+    title=r"$\mathbf{2D}$ Wave Equation — Absolute Error (FD)",
+    cmap="inferno",
+    savefig=True,
+    filepath=str(Path(__file__).parent.parent / "figs" / "schemes" / "fd_error_heatmaps_2d_const.pdf"),
 )
-plot_error_heatmaps_2d(
-    u_fem, u_exact, t_indices, t_labels, "FEM", "figs/schemes/fem_error_heatmaps_2d_const.pdf"
+plot_2d_snapshots(
+    fem_error, t_indices, t_labels,
+    title=r"$\mathbf{2D}$ Wave Equation — Absolute Error (FEM)",
+    cmap="inferno",
+    savefig=True,
+    filepath=str(Path(__file__).parent.parent / "figs" / "schemes" / "fem_error_heatmaps_2d_const.pdf"),
 )

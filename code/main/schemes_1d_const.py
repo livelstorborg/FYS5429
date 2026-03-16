@@ -16,8 +16,6 @@ from src.pde import fd_solve, fem_solve, u_exact, create_grid
 from src.pinn import train_pinn
 from src.experiment import absolute_error, relative_error
 from src.plotting import (
-    plot_solution_at_t,
-    plot_error_at_t,
     plot_3d_surface,
     subplot_3d_surfaces,
 )
@@ -109,6 +107,7 @@ fig_fem_error = plot_3d_surface(
     elev=20,
     azim=45,
     title="Finite Element Error (1D)",
+    cmap="inferno",
     show=True,
     savefig=True,
     filepath="figs/schemes/fem_error_surface_1d_const.pdf",
