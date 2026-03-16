@@ -9,142 +9,11 @@ from mpl_toolkits.mplot3d import Axes3D
 import flax.nnx as nnx
 
 
-# -----------------------------------------------------------------------------
-# Part b: finite-difference comparisons
-# -----------------------------------------------------------------------------
-
-def plot_solution_at_t(
-    *,
-    grid,
-    u_num,
-    u_true,
-    dx,
-    t,
-    dim,
-    filepath,
-):
-    colors = ["blue", "green", "orange", "purple"]
-    num_t = len(t)
-
-    fig, axes = plt.subplots(1, num_t, figsize=(6 * num_t, 5))
-    fig.suptitle(
-        rf"$\mathbf{{{dim}D}}$ Wave Equation, $\mathbf{{\Delta x = {dx:.3f}}}$",
-        fontsize=20,
-        fontweight="bold",
-        y=0.98
-    )
-
-    if num_t == 1:
-        axes = [axes]
-
-    for idx, ax in enumerate(axes):
-        grid_t = grid[idx] if isinstance(grid, list) else grid
-        u_true_t = u_true[idx] if isinstance(u_true, list) else u_true
-
-        ax.plot(grid_t, u_true_t, label="Analytical", color="red", linewidth=5, alpha=0.5)
-        for i, scheme in enumerate(u_num):
-            ax.plot(grid_t, scheme["data"][idx], ":", label=scheme["label"],
-                    color=colors[i % len(colors)], linewidth=3)
-
-        ax.grid(alpha=0.3)
-        ax.tick_params(axis='both', labelsize=16)
-        ax.set_xlabel("x", fontsize=16)
-        ax.set_ylabel("u(x, t)", fontsize=16)
-        ax.set_title(rf"$t = {float(t[idx]):.3f}$", fontsize=16, fontweight="bold")
-        ax.legend(fontsize=14)
-
-    plt.tight_layout()
-    plt.savefig(filepath, dpi=300, bbox_inches="tight")
-    plt.show()
 
 
-def plot_error_at_t(
-    *,
-    grid,
-    u_num,
-    u_true,
-    dx,
-    t,
-    dim,
-    savefig=False,
-    filepath=None,
-    show=False,
-):
-    colors = ["blue", "green", "orange", "purple"]
-    num_t = len(t)
-
-    fig, axes = plt.subplots(1, num_t, figsize=(6 * num_t, 5))
-    fig.suptitle(
-        rf"$\mathbf{{{dim}D}}$ Wave Equation, $\mathbf{{\Delta x = {dx:.3f}}}$",
-        fontsize=20,
-        fontweight="bold",
-        y=0.98
-    )
-
-    if num_t == 1:
-        axes = [axes]
-
-    for idx, ax in enumerate(axes):
-        grid_t = grid[idx] if isinstance(grid, list) else grid
-        u_true_t = u_true[idx] if isinstance(u_true, list) else u_true
-
-        for i, scheme in enumerate(u_num):
-            err = np.abs(scheme["data"][idx] - u_true_t)
-            ax.plot(grid_t, err, label=f"{scheme['label']}",
-                    color=colors[i % len(colors)], linewidth=2)
-
-        ax.set_yscale("log")
-        ax.grid(alpha=0.3)
-        ax.tick_params(axis='both', labelsize=16)
-        ax.set_xlabel("x", fontsize=16)
-        ax.set_ylabel("Absolute Error", fontsize=16)
-        ax.set_title(rf"$t = {float(t[idx]):.3f}$", fontsize=16, fontweight="bold")
-        ax.legend(fontsize=14)
-
-    plt.tight_layout()
-    if savefig and filepath:
-        plt.savefig(filepath, dpi=300, bbox_inches="tight")
-    if show:
-        plt.show()
-
-
-
-
-# -----------------------------------------------------------------------------
-# Part b: FD scheme error curves
-# -----------------------------------------------------------------------------
-def plot_scheme_errors_at_t(error_list, t, title, filepath):
-    plt.figure(figsize=(8, 5))
-
-    for err in error_list:
-        x = err["x"]
-        dx = err["dx"]
-        # Determine which error to plot based on which time is closer
-        if abs(err["t1"] - t) < abs(err["t2"] - t):
-            error = np.abs(err["t_error"])
-        else:
-            error = np.abs(err["t2_error"])
-        plt.plot(x, error, label=rf"$\Delta x = {dx:.2f}$", linewidth=2)
-
-    plt.grid(alpha=0.3)
-    plt.xlabel("x", fontsize=16)
-    plt.ylabel("Error", fontsize=16)
-    plt.title(title, fontsize=18, fontweight="bold")
-    plt.legend(fontsize=16)
-    plt.xticks(fontsize=16)
-    plt.yticks(fontsize=16)
-    plt.tight_layout()
-    plt.yscale("log")
-    plt.savefig(filepath, bbox_inches="tight", dpi=300)
-    plt.show()
-
-
-
-
-
-# -----------------------------------------------------------------------------
-# Part c: 3D surfaces for solutions/errors
-# -----------------------------------------------------------------------------
+# =============================================================================
+#                       Single 3D surface
+# =============================================================================
 def plot_3d_surface(
     x, 
     t, 
@@ -239,7 +108,9 @@ def plot_3d_surface(
     return fig
 
 
-
+# =============================================================================
+#                       Subplots of 3D surfaces
+# =============================================================================
 def subplot_3d_surfaces(
     figures,
     titles=None,
@@ -358,27 +229,16 @@ def subplot_3d_surfaces(
 
 
 
-
-def plot_training_loss(losses):
-    losses_np = jnp.asarray(losses)
-
-    steps = np.arange(len(losses_np))
-    plt.figure(figsize=(6, 4))
-    plt.semilogy(steps, losses_np)
-    plt.xlabel("Training step")
-    plt.ylabel("Loss (log scale)")
-    plt.title(f"PINN training loss — {len(losses_np)} steps")
-    plt.grid(alpha=0.3)
-    plt.show()
-    return losses_np
-
-
+# =============================================================================
+#                       Loss curve
+# =============================================================================
 def plot_loss(losses, show=True, savefig=False, filepath=None):
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.semilogy(losses)
-    ax.set_xlabel("Step (across windows)")
-    ax.set_ylabel("Loss")
-    ax.set_title("Training Loss")
+    fig, ax = plt.subplots(figsize=(8,5))
+    ax.semilogy(losses, linewidth=2)
+    ax.set_xlabel("Iterations", fontsize=16)
+    ax.set_ylabel("Loss", fontsize=16)
+    ax.set_title(r"$\mathbf{Training\ Loss}$", fontsize=18)
+    ax.tick_params(axis="both", labelsize=16)
     ax.grid(True)
     plt.tight_layout()
     if savefig and filepath:
@@ -388,15 +248,74 @@ def plot_loss(losses, show=True, savefig=False, filepath=None):
     return fig
 
 
+# =============================================================================
+#                 Comparing loss across models, with smoothed curves
+# =============================================================================
+def plot_loss_comparison(losses_list, labels, title="Training Loss Comparison", show=True, savefig=False, filepath=None, smooth_window=50):
+    """
+    Plot and compare training losses for multiple models.
+
+    Each model gets one color with two lines:
+      - low-alpha raw loss
+      - solid smoothed loss (running average)
+
+    Parameters
+    ----------
+    losses_list  : list of array-like, one per model
+    labels       : list of str, one label per model
+    smooth_window: int, window size for running average
+    show         : bool
+    savefig      : bool
+    filepath     : str, save path if savefig=True
+    """
+    fig, ax = plt.subplots(figsize=(8, 5))
+    colors = ["black", "red"]
+
+    smoothed_data = []
+    for i, (losses, label) in enumerate(zip(losses_list, labels)):
+        color = colors[i % len(colors)]
+        losses_np = np.array(losses)
+        steps = np.arange(len(losses_np))
+
+        ax.semilogy(steps, losses_np, color=color, alpha=0.4, linewidth=4)
+
+        kernel = np.ones(smooth_window) / smooth_window
+        smoothed = np.convolve(losses_np, kernel, mode="valid")
+        offset = smooth_window - 1
+        smoothed_data.append((steps[offset:], smoothed, color, label))
+
+    for steps_s, smoothed, color, label in smoothed_data:
+        ax.semilogy(steps_s, smoothed, color=color, label=label, linewidth=2)
+
+    ax.set_xlabel("Iterations", fontsize=16)
+    ax.set_ylabel("Loss", fontsize=16)
+    ax.set_title(title, fontsize=18, fontweight="bold")
+    ax.tick_params(axis="both", labelsize=16)
+    ax.legend(fontsize=16)
+    ax.grid(True)
+    plt.tight_layout()
+
+    if savefig and filepath:
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(filepath, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+    return fig
+
+
+# =============================================================================
+#                       Loss componens curves
+# =============================================================================
 def plot_loss_components(loss_comps, show=True, savefig=False, filepath=None):
-    fig, ax = plt.subplots(figsize=(6, 4))
-    for key, label in [("pde", "PDE"), ("ic_ut", "IC ∂u/∂t"), ("sobolev", "Sobolev")]:
+    fig, ax = plt.subplots(figsize=(8,5))
+    for key, label in [("pde", "PDE"), ("ic_u", "IC u"), ("ic_ut", "IC ∂u/∂t"), ("sobolev", "Sobolev")]:
         if key in loss_comps and any(v > 0 for v in loss_comps[key]):
-            ax.semilogy(loss_comps[key], label=label)
-    ax.set_xlabel("Step (across windows)")
-    ax.set_ylabel("Loss component")
-    ax.set_title("Loss Components")
-    ax.legend()
+            ax.semilogy(loss_comps[key], label=label, linewidth=2)
+    ax.set_xlabel("Iterations", fontsize=16)
+    ax.set_ylabel("Loss component", fontsize=16)
+    ax.set_title(r"$\mathbf{Loss\ Components}$", fontsize=18)
+    ax.tick_params(axis="both", labelsize=16)
+    ax.legend(fontsize=16)
     ax.grid(True)
     plt.tight_layout()
     if savefig and filepath:
@@ -406,9 +325,9 @@ def plot_loss_components(loss_comps, show=True, savefig=False, filepath=None):
     return fig
 
 
-# -----------------------------------------------------------------------------
-# Part d: architecture sweep heatmaps
-# -----------------------------------------------------------------------------
+# =============================================================================
+#                       Heatmap of L2 error across width/depth
+# =============================================================================
 def plot_heatmap_width_depth(df, activation, show=True, savefig=False, filepath=None):
     data = df[df["activation"] == activation]
 
@@ -501,325 +420,9 @@ def plot_heatmap_width_depth(df, activation, show=True, savefig=False, filepath=
     return fig
 
 
-# -----------------------------------------------------------------------------
-# Part d: run all heatmaps
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# PINN error reports
-# -----------------------------------------------------------------------------
-def error_report_1d_wave(
-    model,
-    u_exact_fn,
-    times,
-    *,
-    c=1.0,
-    L=1.0,
-    Nx=201,
-    make_snapshot=True,
-    snapshot_metric="relL2",
-    logy=True,
-    title_prefix="",
-):
-    times = jnp.asarray(times, dtype=float)
-    x = jnp.linspace(0.0, L, Nx)
-
-    @nnx.jit
-    def eval_at_time(t):
-        t = jnp.asarray(t)
-        xt = jnp.stack([x, jnp.full_like(x, t)], axis=1)
-
-        u_pred = model(xt).squeeze()
-        u_true = u_exact_fn(x, jnp.array([t]), c=c)[0]  # (Nx,)
-
-        err = u_pred - u_true
-        relL2 = jnp.sqrt(jnp.mean(err**2)) / (jnp.sqrt(jnp.mean(u_true**2)) + 1e-12)
-        Linf = jnp.max(jnp.abs(err))
-        mae = jnp.mean(jnp.abs(err))
-        rmse = jnp.sqrt(jnp.mean(err**2))
-
-        # H1 semi-norm: error in du/dx
-        def u_pred_scalar(xt_single):
-            return model(xt_single[None]).squeeze()
-
-        dudx_pred = jax.vmap(jax.jacfwd(u_pred_scalar))(xt)[:, 0]  # (Nx,)
-        dudx_true = jnp.gradient(u_true, x)
-        err_dx = dudx_pred - dudx_true
-        h1 = jnp.sqrt(jnp.mean(err**2) + jnp.mean(err_dx**2))
-
-        return relL2, Linf, mae, rmse, h1, u_pred, u_true, err
-
-    relL2_list, Linf_list, mae_list, rmse_list, h1_list = [], [], [], [], []
-    snaps = {}
-
-    for t in times:
-        relL2, Linf, mae, rmse, h1, u_pred, u_true, err = eval_at_time(t)
-        relL2_list.append(float(relL2))
-        Linf_list.append(float(Linf))
-        mae_list.append(float(mae))
-        rmse_list.append(float(rmse))
-        h1_list.append(float(h1))
-
-        if make_snapshot:
-            snaps[float(t)] = {
-                "u_pred": jnp.array(u_pred),
-                "u_true": jnp.array(u_true),
-                "err": jnp.array(err),
-            }
-
-    relL2_arr = jnp.array(relL2_list)
-    Linf_arr = jnp.array(Linf_list)
-    mae_arr = jnp.array(mae_list)
-    rmse_arr = jnp.array(rmse_list)
-    h1_arr = jnp.array(h1_list)
-
-    worst_rel_idx = int(jnp.argmax(relL2_arr))
-    worst_inf_idx = int(jnp.argmax(Linf_arr))
-
-    summary = {
-        "relL2_mean": float(relL2_arr.mean()),
-        "relL2_median": float(jnp.median(relL2_arr)),
-        "relL2_max": float(relL2_arr[worst_rel_idx]),
-        "relL2_max_time": float(times[worst_rel_idx]),
-        "Linf_mean": float(Linf_arr.mean()),
-        "Linf_max": float(Linf_arr[worst_inf_idx]),
-        "Linf_max_time": float(times[worst_inf_idx]),
-        "mae_mean": float(mae_arr.mean()),
-        "rmse_mean": float(rmse_arr.mean()),
-        "h1_mean": float(h1_arr.mean()),
-    }
-
-    plt.figure(figsize=(8, 4.8))
-    plt.plot(times, relL2_arr, marker="o", label="Relative L2")
-    plt.plot(times, Linf_arr, marker="s", label="L∞")
-    plt.plot(times, mae_arr, marker="^", label="MAE")
-    plt.plot(times, rmse_arr, marker="D", label="RMSE")
-    plt.plot(times, h1_arr, marker="v", label="H1")
-    plt.xlabel("Time t")
-    plt.ylabel("Error")
-    ttl = "Error metrics vs time"
-    if title_prefix:
-        ttl = f"{title_prefix} — {ttl}"
-    plt.title(ttl)
-    if logy:
-        plt.yscale("log")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    if make_snapshot and len(snaps) > 0:
-        if snapshot_metric == "Linf":
-            t_snap = float(times[worst_inf_idx])
-            snap_label = "worst L∞"
-        else:
-            t_snap = float(times[worst_rel_idx])
-            snap_label = "worst rel L2"
-
-        plt.figure(figsize=(10, 4))
-        plt.subplot(1, 2, 1)
-        plt.plot(x, snaps[t_snap]["u_true"], label="u_true")
-        plt.plot(x, snaps[t_snap]["u_pred"], "--", label="u_pred")
-        plt.title(f"Solution at t={t_snap:.4f} ({snap_label})")
-        plt.xlabel("x")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-
-        plt.subplot(1, 2, 2)
-        plt.plot(x, jnp.abs(snaps[t_snap]["err"]))
-        plt.title(f"|error| at t={t_snap:.4f}")
-        plt.xlabel("x")
-        plt.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        plt.show()
-
-    print("Accuracy summary:")
-    print(
-        f"  relL2: mean={summary['relL2_mean']:.3e}, median={summary['relL2_median']:.3e}, "
-        f"max={summary['relL2_max']:.3e} at t={summary['relL2_max_time']:.4f}"
-    )
-    print(
-        f"  Linf : mean={summary['Linf_mean']:.3e}, max={summary['Linf_max']:.3e} at t={summary['Linf_max_time']:.4f}"
-    )
-    print(f"  MAE  : mean={summary['mae_mean']:.3e}")
-    print(f"  RMSE : mean={summary['rmse_mean']:.3e}")
-    print(f"  H1   : mean={summary['h1_mean']:.3e}")
-
-    return {
-        "times": times,
-        "relL2": relL2_arr,
-        "Linf": Linf_arr,
-        "mae": mae_arr,
-        "rmse": rmse_arr,
-        "h1": h1_arr,
-        "summary": summary,
-    }
-
-
-def error_report_2d_wave(
-    model,
-    u_exact_fn,
-    times,
-    *,
-    c=1.0,
-    L=1.0,
-    Nx=81,
-    Ny=81,
-    make_snapshot=True,
-    snapshot_metric="relL2",
-    logy=True,
-    title_prefix="",
-):
-    times = jnp.asarray(times, dtype=float)
-
-    x = jnp.linspace(0.0, L, Nx)
-    y = jnp.linspace(0.0, L, Ny)
-    X, Y = jnp.meshgrid(x, y, indexing="ij")
-    XY = jnp.stack([X.ravel(), Y.ravel()], axis=1)
-
-    @nnx.jit
-    def eval_at_time(t):
-        t = jnp.asarray(t)
-        T = jnp.full((XY.shape[0], 1), t)
-        xyt = jnp.concatenate([XY, T], axis=1)
-
-        u_pred = model(xyt).reshape(Nx, Ny)
-        u_true = u_exact_fn(X, Y, t, c=c)
-
-        err = u_pred - u_true
-        relL2 = jnp.sqrt(jnp.mean(err**2)) / (jnp.sqrt(jnp.mean(u_true**2)) + 1e-12)
-        Linf = jnp.max(jnp.abs(err))
-        mae = jnp.mean(jnp.abs(err))
-        rmse = jnp.sqrt(jnp.mean(err**2))
-
-        # H1 semi-norm: error in du/dx and du/dy
-        def u_pred_scalar(xyt_single):
-            return model(xyt_single[None]).squeeze()
-
-        jac = jax.vmap(jax.jacfwd(u_pred_scalar))(xyt)  # (Nx*Ny, 3)
-        dudx_pred = jac[:, 0].reshape(Nx, Ny)
-        dudy_pred = jac[:, 1].reshape(Nx, Ny)
-        dudx_true = jnp.gradient(u_true, x, axis=0)
-        dudy_true = jnp.gradient(u_true, y, axis=1)
-        err_dx = dudx_pred - dudx_true
-        err_dy = dudy_pred - dudy_true
-        h1 = jnp.sqrt(jnp.mean(err**2) + jnp.mean(err_dx**2) + jnp.mean(err_dy**2))
-
-        return relL2, Linf, mae, rmse, h1, u_pred, u_true, err
-
-    relL2_list, Linf_list, mae_list, rmse_list, h1_list = [], [], [], [], []
-    snaps = {}
-
-    for t in times:
-        relL2, Linf, mae, rmse, h1, u_pred, u_true, err = eval_at_time(t)
-        relL2_list.append(float(relL2))
-        Linf_list.append(float(Linf))
-        mae_list.append(float(mae))
-        rmse_list.append(float(rmse))
-        h1_list.append(float(h1))
-
-        if make_snapshot:
-            snaps[float(t)] = {
-                "u_pred": jnp.array(u_pred),
-                "u_true": jnp.array(u_true),
-                "err": jnp.array(err),
-            }
-
-    relL2_arr = jnp.array(relL2_list)
-    Linf_arr = jnp.array(Linf_list)
-    mae_arr = jnp.array(mae_list)
-    rmse_arr = jnp.array(rmse_list)
-    h1_arr = jnp.array(h1_list)
-
-    worst_rel_idx = int(jnp.argmax(relL2_arr))
-    worst_inf_idx = int(jnp.argmax(Linf_arr))
-
-    summary = {
-        "relL2_mean": float(relL2_arr.mean()),
-        "relL2_median": float(jnp.median(relL2_arr)),
-        "relL2_max": float(relL2_arr[worst_rel_idx]),
-        "relL2_max_time": float(times[worst_rel_idx]),
-        "Linf_mean": float(Linf_arr.mean()),
-        "Linf_max": float(Linf_arr[worst_inf_idx]),
-        "Linf_max_time": float(times[worst_inf_idx]),
-        "mae_mean": float(mae_arr.mean()),
-        "rmse_mean": float(rmse_arr.mean()),
-        "h1_mean": float(h1_arr.mean()),
-    }
-
-    plt.figure(figsize=(8, 4.8))
-    plt.plot(times, relL2_arr, marker="o", label="Relative L2")
-    plt.plot(times, Linf_arr, marker="s", label="L∞")
-    plt.plot(times, mae_arr, marker="^", label="MAE")
-    plt.plot(times, rmse_arr, marker="D", label="RMSE")
-    plt.plot(times, h1_arr, marker="v", label="H1")
-    plt.xlabel("Time t")
-    plt.ylabel("Error")
-    ttl = "Error metrics vs time"
-    if title_prefix:
-        ttl = f"{title_prefix} — {ttl}"
-    plt.title(ttl)
-    if logy:
-        plt.yscale("log")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    if make_snapshot and len(snaps) > 0:
-        if snapshot_metric == "Linf":
-            t_snap = float(times[worst_inf_idx])
-            snap_label = "worst L∞"
-        else:
-            t_snap = float(times[worst_rel_idx])
-            snap_label = "worst rel L2"
-
-        err = snaps[t_snap]["err"]
-        abs_err = jnp.abs(err)
-
-        plt.figure(figsize=(15, 4.5))
-
-        plt.subplot(1, 3, 1)
-        plt.imshow(snaps[t_snap]["u_true"], origin="lower", aspect="auto")
-        plt.title(f"u_true at t={t_snap:.4f}")
-        plt.colorbar()
-
-        plt.subplot(1, 3, 2)
-        plt.imshow(snaps[t_snap]["u_pred"], origin="lower", aspect="auto")
-        plt.title(f"u_pred at t={t_snap:.4f}")
-        plt.colorbar()
-
-        plt.subplot(1, 3, 3)
-        plt.imshow(abs_err, origin="lower", aspect="auto")
-        plt.title(f"|error| at t={t_snap:.4f} ({snap_label})")
-        plt.colorbar()
-
-        plt.tight_layout()
-        plt.show()
-
-    print("Accuracy summary:")
-    print(
-        f"  relL2: mean={summary['relL2_mean']:.3e}, median={summary['relL2_median']:.3e}, "
-        f"max={summary['relL2_max']:.3e} at t={summary['relL2_max_time']:.4f}"
-    )
-    print(
-        f"  Linf : mean={summary['Linf_mean']:.3e}, max={summary['Linf_max']:.3e} at t={summary['Linf_max_time']:.4f}"
-    )
-    print(f"  MAE  : mean={summary['mae_mean']:.3e}")
-    print(f"  RMSE : mean={summary['rmse_mean']:.3e}")
-    print(f"  H1   : mean={summary['h1_mean']:.3e}")
-
-    return {
-        "times": times,
-        "relL2": relL2_arr,
-        "Linf": Linf_arr,
-        "mae": mae_arr,
-        "rmse": rmse_arr,
-        "h1": h1_arr,
-        "summary": summary,
-    }
-
-
+# =============================================================================
+#                       Printing table of results from CSV files
+# =============================================================================
 def print_optimizer_comparison_tables(data_folder):
     """
     Read CSV files from optimizer subfolders and print comparison tables.
@@ -893,19 +496,49 @@ def print_optimizer_comparison_tables(data_folder):
     print(f"\n{'=' * 80}\n")
 
 
-def plot_all_heatmaps(df, save_dir="figs", show=False):
-    os.makedirs(save_dir, exist_ok=True)
-    activations = df["activation"].unique()
 
-    for act in activations:
-        print(f"Creating heatmap for activation: {act}")
-        fig = plot_heatmap_width_depth(df, activation=act, show=show)
 
-        filename = f"heatmap_activation_{act}.pdf"
-        filepath = os.path.join(save_dir, filename)
+# =============================================================================
+#                       Plotting 2D snapshots at specific time points
+# =============================================================================
+def plot_2d_snapshots(field, t_indices, t_labels, title, cmap="viridis",
+                      show=True, savefig=False, filepath=None):
+    """
+    Plot 2D snapshots of a field (solution, absolute error, etc.) at given time indices.
 
-        fig.savefig(filepath, dpi=300, bbox_inches="tight")
-        plt.close(fig)
+    Parameters
+    ----------
+    field       : array-like, shape (Nt, Nx, Ny)
+    t_indices   : list of int, time indices to plot
+    t_labels    : list of float, corresponding time values (for titles)
+    title       : str, overall figure title
+    cmap        : str, colormap
+    show        : bool
+    savefig     : bool
+    filepath    : str, save path if savefig=True
+    """
+    n = len(t_indices)
+    fig, axes = plt.subplots(1, n, figsize=(4 * n, 5), constrained_layout=True)
+    if n == 1:
+        axes = [axes]
 
-        print(f"Saved: {filepath}")
+    fig.suptitle(title, fontsize=16, fontweight="bold", y=0.92)
+
+    for ax, idx, t_val in zip(axes, t_indices, t_labels):
+        snapshot = np.array(field[idx])
+        im = ax.imshow(
+            snapshot.T, origin="lower", extent=[0, 1, 0, 1],
+            cmap=cmap, aspect="equal"
+        )
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.01)
+        ax.set_xlabel("x", fontsize=11)
+        ax.set_ylabel("y", fontsize=11)
+        ax.set_title(rf"$\mathbf{{t={t_val:.2f}}}$", fontsize=11)
+
+    if savefig and filepath is not None:
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(filepath, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+    plt.close()
 
