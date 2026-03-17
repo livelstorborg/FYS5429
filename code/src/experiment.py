@@ -8,11 +8,11 @@ import numpy as np
 
 try:
     from src.pde import u_exact
-    from src.pinn import train_wave_pinn, pack_params
+    from src.pinn import train_pinn, pack_params
     from src.utils import compute_error_metrics_1d, compute_error_metrics_2d
 except ModuleNotFoundError:
     from pde import u_exact
-    from pinn import train_wave_pinn, pack_params
+    from pinn import train_pinn, pack_params
     from utils import compute_error_metrics_1d, compute_error_metrics_2d
 
 
@@ -93,8 +93,9 @@ def run_architecture_sweep(
                     print(f"SEED={seed}\n")
 
                     # --- Adam ---
-                    model_adam, _, _ = train_wave_pinn(
-                        widths=widths,
+                    model_adam, _, _ = train_pinn(
+                        widths,
+                        dim=1,
                         activation=act_fn,
                         optimizer="adam",
                         steps=adam_steps,
@@ -122,8 +123,9 @@ def run_architecture_sweep(
                         })
 
                     # --- L-BFGS warm-started from Adam ---
-                    model_lbfgs, _, _ = train_wave_pinn(
-                        widths=widths,
+                    model_lbfgs, _, _ = train_pinn(
+                        widths,
+                        dim=1,
                         activation=act_fn,
                         optimizer="lbfgs",
                         steps=lbfgs_steps,
@@ -172,6 +174,116 @@ def run_architecture_sweep(
               f"(total {time.time()-total_start:.1f}s)\n")
 
     return {opt: pd.DataFrame(rows) for opt, rows in all_results.items()}
+
+
+# ---------- 2D architecture sweep (adam → lbfgs only) ----------
+def run_architecture_sweep_2d(
+    hidden_widths,
+    num_hidden_layers,
+    activation_fns,
+    *,
+    T=1.0,
+    N_int=2000,
+    N_ic=200,
+    lambda_ic=100.0,
+    lr=1e-3,
+    c=1.0,
+    adam_steps=2000,
+    lbfgs_steps=3000,
+    seeds=(0, 7, 103, 42),
+    Nx_eval=25,
+    Ny_eval=25,
+    Nt_eval=25,
+    save_to_csv=False,
+    use_pre_computed=False,
+    data_dir="data",
+):
+    """
+    Architecture sweep for the 2D wave PINN using Adam→L-BFGS as one combined optimizer.
+
+    For each architecture and seed: trains Adam for `adam_steps`, then
+    warm-starts L-BFGS for `lbfgs_steps`. Only the final model is saved.
+
+    Returns a DataFrame with columns: activation, hidden_layers, width, L2_rel_mean, Linf_mean.
+    """
+    if use_pre_computed:
+        print(f"Loading pre-computed results from {data_dir} ...")
+        act_names = list(activation_fns.keys())
+        return load_sweep_results_from_csv(data_dir=data_dir, activation_fns=act_names)
+
+    print(f"========== 2D ARCHITECTURE SWEEP ==========\n adam({adam_steps} steps) → lbfgs({lbfgs_steps} steps)")
+    if save_to_csv:
+        os.makedirs(data_dir, exist_ok=True)
+
+    x_eval = jnp.linspace(0.0, 1.0, Nx_eval)
+    y_eval = jnp.linspace(0.0, 1.0, Ny_eval)
+    t_eval = jnp.linspace(0.0, T, Nt_eval)
+
+    all_results = []
+    total_start = time.time()
+
+    for act_name, act_fn in activation_fns.items():
+        print(f"\n---------- {act_name} ----------")
+        act_start = time.time()
+
+        for depth in num_hidden_layers:
+            for width in hidden_widths:
+                widths = tuple([width] * depth)
+                print(f"  Layers={depth}, Width={width}")
+
+                arch_rows = []
+                L2_all    = []
+                Linf_all  = []
+
+                for seed in seeds:
+                    print(f"    SEED={seed}")
+
+                    _, model_final, _ = train_pinn(
+                        widths,
+                        dim=2,
+                        activation=act_fn,
+                        adam_steps=adam_steps,
+                        lbfgs_steps=lbfgs_steps,
+                        N_int=N_int,
+                        N_ic=N_ic,
+                        T=T,
+                        c=c,
+                        lambda_ic=lambda_ic,
+                        lr=lr,
+                        seed=seed,
+                        log_every=max(adam_steps, lbfgs_steps),
+                    )
+
+                    L2, Linf, _, _, _ = compute_error_metrics_2d(
+                        model_final, x=x_eval, y=y_eval, t=t_eval, c=c
+                    )
+                    print(f"    L2={float(L2):.3e}  Linf={float(Linf):.3e}")
+                    L2_all.append(L2)
+                    Linf_all.append(Linf)
+                    if save_to_csv:
+                        arch_rows.append({
+                            "activation": act_name, "hidden_layers": depth,
+                            "width": width, "seed": seed,
+                            "L2_rel": float(L2), "Linf": float(Linf),
+                        })
+
+                if save_to_csv:
+                    fname = os.path.join(data_dir, f"{act_name}_L{depth}_N{width}.csv")
+                    pd.DataFrame(arch_rows).to_csv(fname, index=False)
+                    print(f"    saved {fname}")
+
+                all_results.append({
+                    "activation":    act_name,
+                    "hidden_layers": depth,
+                    "width":         width,
+                    "L2_rel_mean":   float(np.mean(L2_all)),
+                    "Linf_mean":     float(np.mean(Linf_all)),
+                })
+
+        print(f"  {act_name} done in {time.time()-act_start:.1f}s  "
+              f"(total {time.time()-total_start:.1f}s)\n")
+
+    return pd.DataFrame(all_results)
 
 
 # ---------- Learningrate sweep ----------

@@ -219,3 +219,98 @@ def loss_scalar(
         norm=norm, lambda_sob=lambda_sob, lambda_sob2=lambda_sob2,
     )
     return loss
+
+
+# =============================================================================
+# 1D variable-c loss  (u_tt = c(x,t)² u_xx)
+# Same hard-BC/IC ansatz as constant-c; only the residual changes.
+# c_fn must be callable: c_fn(x_scalar, t_scalar) -> scalar
+# =============================================================================
+
+def r_scalar_params_var_1d(params, x, t, c_fn, activation):
+    """PDE residual r = u_tt - c(x,t)² u_xx at a single (x,t) point."""
+    utt = _u_tt(params, x, t, activation)
+    uxx = _u_xx(params, x, t, activation)
+    return utt - c_fn(x, t) ** 2 * uxx
+
+
+def loss_scalar_var_1d(params, x_int, t_int, x_ic, c_fn, lambda_ic, activation):
+    """
+    Scalar loss for 1D variable-c PINN.
+    c_fn is a Python callable — must be captured in the JIT closure, not passed
+    as a traced argument.
+    """
+    def r_single(xi, ti):
+        return r_scalar_params_var_1d(params, xi, ti, c_fn, activation)
+
+    loss_pde = jnp.mean(jax.vmap(r_single)(x_int, t_int) ** 2)
+
+    t0 = jnp.zeros(())
+    u_t_ic = jax.vmap(lambda xi: _u_t(params, xi, t0, activation))(x_ic)
+    loss_ic_ut = jnp.mean(u_t_ic ** 2)
+
+    return loss_pde + lambda_ic * loss_ic_ut
+
+
+# =============================================================================
+# 2D wave equation loss  (u_tt = c² (u_xx + u_yy))
+# Hard-BC/IC ansatz: u(x,y,t) = sin(πx)sin(πy) + t·sin(πx)sin(πy)·N(x,y,t)
+# =============================================================================
+
+def _u_hat_params_2d(params, xyt, activation):
+    """
+    2D hard-BC/IC ansatz:
+        u(x,y,t) = sin(πx)sin(πy) + t·sin(πx)sin(πy)·N(x,y,t)
+    Guarantees u=0 on all four walls and u(x,y,0)=sin(πx)sin(πy).
+    xyt: (N, 3) → (N,)
+    """
+    x = xyt[:, 0]
+    y = xyt[:, 1]
+    t = xyt[:, 2]
+    N = _forward_params(params, xyt, activation)[:, 0]
+    spatial = jnp.sin(jnp.pi * x) * jnp.sin(jnp.pi * y)
+    return spatial + t * spatial * N
+
+
+def _u_scalar_2d(params, x, y, t, activation):
+    """Scalar u at a single (x, y, t) point — entry point for jax.grad."""
+    xyt = jnp.stack([x, y, t])[None]
+    return _u_hat_params_2d(params, xyt, activation)[0]
+
+
+def _u_t_2d(params, x, y, t, activation):
+    return jax.grad(lambda t_: _u_scalar_2d(params, x, y, t_, activation))(t)
+
+
+def r_scalar_params_2d(params, x, y, t, c, activation):
+    """PDE residual r = u_tt - c²(u_xx + u_yy) at a single (x,y,t) point."""
+    utt = jax.grad(jax.grad(lambda t_: _u_scalar_2d(params, x, y, t_, activation)))(t)
+    uxx = jax.grad(jax.grad(lambda x_: _u_scalar_2d(params, x_, y, t, activation)))(x)
+    uyy = jax.grad(jax.grad(lambda y_: _u_scalar_2d(params, x, y_, t, activation)))(y)
+    return utt - c**2 * (uxx + uyy)
+
+
+def loss_fn_2d(params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation):
+    """
+    2D PINN loss: MSE PDE residual + lambda_ic * MSE velocity IC.
+
+    Returns (total_loss, {"pde": ..., "ic_ut": ...}).
+    """
+    def r_single(xi, yi, ti):
+        return r_scalar_params_2d(params, xi, yi, ti, c, activation)
+
+    r = jax.vmap(r_single)(x_int, y_int, t_int)
+    loss_pde = jnp.mean(r**2)
+
+    t0 = jnp.zeros(())
+    u_t_ic = jax.vmap(lambda xi, yi: _u_t_2d(params, xi, yi, t0, activation))(x_ic, y_ic)
+    loss_ic_ut = jnp.mean(u_t_ic**2)
+
+    total = loss_pde + lambda_ic * loss_ic_ut
+    return total, {"pde": loss_pde, "ic_ut": loss_ic_ut}
+
+
+def loss_scalar_2d(params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation):
+    """Scalar wrapper for 2D loss — pass to jax.grad or optax."""
+    loss, _ = loss_fn_2d(params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation)
+    return loss
