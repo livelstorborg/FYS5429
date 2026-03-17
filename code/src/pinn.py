@@ -209,10 +209,116 @@ train_step_lbfgs = jax.jit(
 
 
 # =============================================================================
+# 2D wave PINN  (u_tt = c²(u_xx + u_yy),  (x,y) ∈ [0,1]², t ∈ [0,T])
+# =============================================================================
+
+class MLP2d(nnx.Module):
+    """
+    MLP for the 2D wave PINN.
+
+    Hard-BC/IC ansatz:
+        u(x,y,t) = sin(πx)sin(πy) + t·sin(πx)sin(πy)·N(x,y,t)
+    Guarantees u=0 on all four walls and u(x,y,0)=sin(πx)sin(πy) exactly.
+    Input xyt: (N, 3) → Output: (N, 1).
+    """
+
+    def __init__(self, widths: tuple, *, key, activation=jax.nn.tanh):
+        keys = jax.random.split(key, len(widths) + 1)
+        dims = [3] + list(widths) + [1]
+        self.ws = nnx.List()
+        self.bs = nnx.List()
+        self.activation = activation
+        for k, din, dout in zip(keys, dims[:-1], dims[1:]):
+            wk, bk = jax.random.split(k)
+            W = jax.random.normal(wk, (din, dout)) * jnp.sqrt(2.0 / din)
+            b = jnp.zeros((dout,), dtype=W.dtype)
+            self.ws.append(nnx.Param(W))
+            self.bs.append(nnx.Param(b))
+
+    def __call__(self, xyt):
+        x = xyt[:, 0]
+        y = xyt[:, 1]
+        t = xyt[:, 2]
+        z = xyt
+        act = self.activation
+        for W, b in zip(self.ws[:-1], self.bs[:-1]):
+            z = act(z @ W + b)
+        N = (z @ self.ws[-1] + self.bs[-1])[:, 0]
+        spatial = jnp.sin(jnp.pi * x) * jnp.sin(jnp.pi * y)
+        u = spatial + t * spatial * N
+        return u[:, None]   # (N, 1)
+
+
+def _train_step_adam_2d(model, opt_state, x_int, y_int, t_int, x_ic, y_ic,
+                        c, lambda_ic, opt):
+    try:
+        from src.loss import loss_scalar_2d
+    except ModuleNotFoundError:
+        from loss import loss_scalar_2d
+    params = pack_params(model)
+    activation = model.activation
+    loss, grads = jax.value_and_grad(
+        lambda p: loss_scalar_2d(p, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation)
+    )(params)
+    updates, new_opt_state = opt.update(grads, opt_state, params)
+    new_params = optax.apply_updates(params, updates)
+    apply_params(model, new_params)
+    return model, new_opt_state, loss
+
+
+train_step_adam_2d = jax.jit(_train_step_adam_2d, static_argnames=["opt"])
+
+
+def _train_step_lbfgs_2d(model, opt_state, x_int, y_int, t_int, x_ic, y_ic,
+                         c, lambda_ic, opt):
+    try:
+        from src.loss import loss_scalar_2d
+    except ModuleNotFoundError:
+        from loss import loss_scalar_2d
+    params = pack_params(model)
+    activation = model.activation
+
+    def loss_fn_wrapped(p):
+        return loss_scalar_2d(p, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation)
+
+    value_and_grad_fn = optax.value_and_grad_from_state(loss_fn_wrapped)
+    value, grads = value_and_grad_fn(params, state=opt_state)
+    updates, new_opt_state = opt.update(
+        grads, opt_state, params,
+        value=value, grad=grads, value_fn=loss_fn_wrapped,
+    )
+    new_params = optax.apply_updates(params, updates)
+    apply_params(model, new_params)
+    return model, new_opt_state, value
+
+
+train_step_lbfgs_2d = jax.jit(_train_step_lbfgs_2d, static_argnames=["opt"])
+
+
+# =============================================================================
+# Schedule helper
+# =============================================================================
+
+def _make_schedule(lr, steps, kind):
+    """
+    Build a learning-rate schedule.
+
+    kind : "cosine"      — cosine decay from lr to 0 over `steps`
+           "exponential" — exponential decay, ×0.95 every 1000 steps
+    """
+    if kind == "cosine":
+        return optax.cosine_decay_schedule(lr, decay_steps=steps)
+    elif kind == "exponential":
+        return optax.exponential_decay(lr, transition_steps=1000, decay_rate=0.95)
+    else:
+        raise ValueError(f"lr_schedule must be 'cosine' or 'exponential', got {kind!r}")
+
+
+# =============================================================================
 # Main training function
 # =============================================================================
 
-def train_wave_pinn(
+def _train_pinn_1d(
     widths,
     *,
     activation=jax.nn.tanh,
@@ -232,6 +338,7 @@ def train_wave_pinn(
     norm="L2",
     lambda_sob=1.0,
     lambda_sob2=1.0,
+    lr_schedule="cosine",
 ):
     """
     Train a PINN for the 1D wave equation without time windows.
@@ -249,13 +356,14 @@ def train_wave_pinn(
     T                 : final time
     c                 : wave speed
     lambda_ic         : IC loss weight
-    lr                : learning rate (used for Adam/AdamW and the L-BFGS warm-up)
+    lr                : peak learning rate
     grad_clip         : global gradient norm clip for Adam/AdamW (set <=0 to disable)
     seed              : random seed
     log_every         : print/record interval
     norm              : "L2" | "H1" | "H2" — PDE loss norm (see loss_nnx.py)
     lambda_sob        : weight for ‖∇r‖² term (H1, H2)
     lambda_sob2       : weight for ‖H_r‖²_F term (H2 only)
+    lr_schedule       : "cosine" | "exponential"
 
     Returns
     -------
@@ -270,10 +378,12 @@ def train_wave_pinn(
     if init_params is not None:
         apply_params(model, init_params)
 
-    c_arr           = jnp.array(c)
     lambda_ic_arr   = jnp.array(lambda_ic)
     lambda_sob_arr  = jnp.array(lambda_sob)
     lambda_sob2_arr = jnp.array(lambda_sob2)
+
+    is_var_c = callable(c)
+    c_arr    = c if is_var_c else jnp.array(c)
 
     opt_lower = optimizer.lower()
     is_lbfgs  = opt_lower == "lbfgs"
@@ -282,42 +392,111 @@ def train_wave_pinn(
     loss_components: list[dict] = []
 
     # -------------------------------------------------------------------------
+    # For variable-c, build closure-based JIT steps so c_fn never touches JIT
+    # as a traced argument (Python callables are not valid JAX pytree leaves).
+    # -------------------------------------------------------------------------
+    if is_var_c:
+        try:
+            from src.loss import loss_scalar_var_1d
+        except ModuleNotFoundError:
+            from loss import loss_scalar_var_1d
+
+        def _make_var_adam_step(opt_):
+            @jax.jit
+            def _step(params, opt_state, x_int, t_int, x_ic):
+                loss, grads = jax.value_and_grad(
+                    lambda p: loss_scalar_var_1d(
+                        p, x_int, t_int, x_ic, c_arr, lambda_ic_arr, activation
+                    )
+                )(params)
+                updates, new_state = opt_.update(grads, opt_state, params)
+                return optax.apply_updates(params, updates), new_state, loss
+            return _step
+
+        def _make_var_lbfgs_step(opt_, x_int_f, t_int_f, x_ic_f):
+            @jax.jit
+            def _step(params, opt_state):
+                def loss_fn_w(p):
+                    return loss_scalar_var_1d(
+                        p, x_int_f, t_int_f, x_ic_f, c_arr, lambda_ic_arr, activation
+                    )
+                value_and_grad_fn = optax.value_and_grad_from_state(loss_fn_w)
+                value, grads = value_and_grad_fn(params, state=opt_state)
+                updates, new_state = opt_.update(
+                    grads, opt_state, params,
+                    value=value, grad=grads, value_fn=loss_fn_w,
+                )
+                return optax.apply_updates(params, updates), new_state, value
+            return _step
+
+        def _run_var_adam(n_steps, opt_, tag):
+            nonlocal key
+            step_fn = _make_var_adam_step(opt_)
+            state = opt_.init(pack_params(model))
+            for i in range(n_steps):
+                key, k_x, k_t, k_ic = jax.random.split(key, 4)
+                x_int = jax.random.uniform(k_x,  (N_int,), minval=0.0, maxval=1.0)
+                t_int = jax.random.uniform(k_t,  (N_int,), minval=0.0, maxval=T)
+                x_ic  = jax.random.uniform(k_ic, (N_ic,),  minval=0.0, maxval=1.0)
+                new_params, state, L = step_fn(pack_params(model), state, x_int, t_int, x_ic)
+                apply_params(model, new_params)
+                losses.append(float(L))
+                if (i + 1) % log_every == 0:
+                    print(f"  [{tag}] step {i+1:5d} | loss={float(L):.3e}")
+            return state
+
+        def _run_var_lbfgs(n_steps, opt_):
+            nonlocal key
+            key, k_x, k_t, k_ic = jax.random.split(key, 4)
+            x_f = jax.random.uniform(k_x,  (N_int,), minval=0.0, maxval=1.0)
+            t_f = jax.random.uniform(k_t,  (N_int,), minval=0.0, maxval=T)
+            ic_f = jax.random.uniform(k_ic, (N_ic,),  minval=0.0, maxval=1.0)
+            step_fn = _make_var_lbfgs_step(opt_, x_f, t_f, ic_f)
+            state = opt_.init(pack_params(model))
+            for i in range(n_steps):
+                new_params, state, L = step_fn(pack_params(model), state)
+                apply_params(model, new_params)
+                losses.append(float(L))
+                if (i + 1) % log_every == 0:
+                    print(f"  [L-BFGS] step {i+1:5d} | loss={float(L):.3e}")
+
+    # -------------------------------------------------------------------------
     # Adam warm-up  (always runs when optimizer="lbfgs" and adam_warmup_steps>0)
     # -------------------------------------------------------------------------
     if is_lbfgs and adam_warmup_steps > 0:
-        warmup_schedule = optax.exponential_decay(lr, transition_steps=1000, decay_rate=0.95)
-        warmup_base = optax.adam(warmup_schedule)
+        warmup_base = optax.adam(_make_schedule(lr, adam_warmup_steps, lr_schedule))
         if grad_clip is not None and grad_clip > 0:
             warmup_opt = optax.chain(optax.clip_by_global_norm(grad_clip), warmup_base)
         else:
             warmup_opt = warmup_base
 
-        warmup_state = warmup_opt.init(pack_params(model))
         print(f"  Warm-starting with {adam_warmup_steps} Adam steps ...")
 
-        for i in range(adam_warmup_steps):
-            key, k_x, k_t, k_ic = jax.random.split(key, 4)
-            x_int = jax.random.uniform(k_x,  (N_int,), minval=0.0, maxval=1.0)
-            t_int = jax.random.uniform(k_t,  (N_int,), minval=0.0, maxval=T)
-            x_ic  = jax.random.uniform(k_ic, (N_ic,),  minval=0.0, maxval=1.0)
-            model, warmup_state, L = train_step_adam(
-                model, warmup_state, x_int, t_int, x_ic,
-                c_arr, lambda_ic_arr, warmup_opt,
-                norm, lambda_sob_arr, lambda_sob2_arr,
-            )
-            losses.append(float(L))
-            if (i + 1) % log_every == 0:
-                print(f"  [warmup] step {i+1:5d} | loss={float(L):.3e}")
+        if is_var_c:
+            _run_var_adam(adam_warmup_steps, warmup_opt, "warmup")
+        else:
+            warmup_state = warmup_opt.init(pack_params(model))
+            for i in range(adam_warmup_steps):
+                key, k_x, k_t, k_ic = jax.random.split(key, 4)
+                x_int = jax.random.uniform(k_x,  (N_int,), minval=0.0, maxval=1.0)
+                t_int = jax.random.uniform(k_t,  (N_int,), minval=0.0, maxval=T)
+                x_ic  = jax.random.uniform(k_ic, (N_ic,),  minval=0.0, maxval=1.0)
+                model, warmup_state, L = train_step_adam(
+                    model, warmup_state, x_int, t_int, x_ic,
+                    c_arr, lambda_ic_arr, warmup_opt,
+                    norm, lambda_sob_arr, lambda_sob2_arr,
+                )
+                losses.append(float(L))
+                if (i + 1) % log_every == 0:
+                    print(f"  [warmup] step {i+1:5d} | loss={float(L):.3e}")
 
     # -------------------------------------------------------------------------
     # Main optimizer
     # -------------------------------------------------------------------------
     if opt_lower == "adam":
-        schedule = optax.exponential_decay(lr, transition_steps=1000, decay_rate=0.95)
-        base_opt = optax.adam(schedule)
+        base_opt = optax.adam(_make_schedule(lr, steps, lr_schedule))
     elif opt_lower == "adamw":
-        schedule = optax.exponential_decay(lr, transition_steps=1000, decay_rate=0.95)
-        base_opt = optax.adamw(schedule)
+        base_opt = optax.adamw(_make_schedule(lr, steps, lr_schedule))
     elif opt_lower == "lbfgs":
         base_opt = optax.lbfgs()
     else:
@@ -328,6 +507,16 @@ def train_wave_pinn(
     else:
         opt = base_opt
 
+    if is_var_c:
+        if is_lbfgs:
+            _run_var_lbfgs(steps, opt)
+        else:
+            _run_var_adam(steps, opt, optimizer)
+        return model, losses, loss_components
+
+    # -------------------------------------------------------------------------
+    # Constant-c path (original code)
+    # -------------------------------------------------------------------------
     # L-BFGS requires fixed collocation points (consistent loss for Hessian approx)
     if is_lbfgs:
         key, k_x, k_t, k_ic = jax.random.split(key, 4)
@@ -386,3 +575,132 @@ def train_wave_pinn(
             print(log_line)
 
     return model, losses, loss_components
+
+
+def _train_pinn_2d(
+    widths,
+    *,
+    activation=jax.nn.tanh,
+    adam_steps=2000,
+    lbfgs_steps=3000,
+    init_params=None,
+    N_int=2000,
+    N_ic=200,
+    T=1.0,
+    c=1.0,
+    lambda_ic=100.0,
+    lr=1e-3,
+    grad_clip=1.0,
+    seed=0,
+    log_every=500,
+    lr_schedule="cosine",
+):
+    """
+    Train a PINN for the 2D wave equation u_tt = c²(u_xx + u_yy).
+
+    Runs `adam_steps` of Adam, then warm-starts L-BFGS from Adam's parameters
+    and runs `lbfgs_steps` of L-BFGS.
+
+    Returns
+    -------
+    model_adam   : MLP2d after Adam phase
+    model_lbfgs  : MLP2d after L-BFGS phase
+    losses       : list[float], total loss at every step (Adam + L-BFGS)
+    """
+    key = jax.random.PRNGKey(seed)
+    key, k_model = jax.random.split(key)
+
+    model = MLP2d(widths, key=k_model, activation=activation)
+    if init_params is not None:
+        apply_params(model, init_params)
+
+    c_arr         = jnp.array(c)
+    lambda_ic_arr = jnp.array(lambda_ic)
+    losses: list[float] = []
+
+    # -------------------------------------------------------------------------
+    # Adam phase
+    # -------------------------------------------------------------------------
+    base_opt = optax.adam(_make_schedule(lr, adam_steps, lr_schedule))
+    if grad_clip is not None and grad_clip > 0:
+        adam_opt = optax.chain(optax.clip_by_global_norm(grad_clip), base_opt)
+    else:
+        adam_opt = base_opt
+
+    adam_state = adam_opt.init(pack_params(model))
+
+    for i in range(adam_steps):
+        key, k_x, k_y, k_t, k_ix, k_iy = jax.random.split(key, 6)
+        x_int = jax.random.uniform(k_x,  (N_int,))
+        y_int = jax.random.uniform(k_y,  (N_int,))
+        t_int = jax.random.uniform(k_t,  (N_int,), maxval=T)
+        x_ic  = jax.random.uniform(k_ix, (N_ic,))
+        y_ic  = jax.random.uniform(k_iy, (N_ic,))
+        model, adam_state, L = train_step_adam_2d(
+            model, adam_state, x_int, y_int, t_int, x_ic, y_ic,
+            c_arr, lambda_ic_arr, adam_opt,
+        )
+        losses.append(float(L))
+        if (i + 1) % log_every == 0:
+            print(f"  [Adam]   step {i+1:5d} | loss={float(L):.3e}")
+
+    # snapshot after Adam
+    model_adam = MLP2d(widths, key=jax.random.PRNGKey(0), activation=activation)
+    apply_params(model_adam, pack_params(model))
+
+    # -------------------------------------------------------------------------
+    # L-BFGS phase  (fixed collocation points)
+    # -------------------------------------------------------------------------
+    lbfgs_opt = optax.lbfgs()
+    key, k_x, k_y, k_t, k_ix, k_iy = jax.random.split(key, 6)
+    x_int_fixed = jax.random.uniform(k_x,  (N_int,))
+    y_int_fixed = jax.random.uniform(k_y,  (N_int,))
+    t_int_fixed = jax.random.uniform(k_t,  (N_int,), maxval=T)
+    x_ic_fixed  = jax.random.uniform(k_ix, (N_ic,))
+    y_ic_fixed  = jax.random.uniform(k_iy, (N_ic,))
+
+    lbfgs_state = lbfgs_opt.init(pack_params(model))
+
+    for i in range(lbfgs_steps):
+        model, lbfgs_state, L = train_step_lbfgs_2d(
+            model, lbfgs_state,
+            x_int_fixed, y_int_fixed, t_int_fixed, x_ic_fixed, y_ic_fixed,
+            c_arr, lambda_ic_arr, lbfgs_opt,
+        )
+        losses.append(float(L))
+        if (i + 1) % log_every == 0:
+            print(f"  [L-BFGS] step {i+1:5d} | loss={float(L):.3e}")
+
+    return model_adam, model, losses
+
+
+# =============================================================================
+# Unified public entry point
+# =============================================================================
+
+def train_pinn(widths, *, dim=1, **kwargs):
+    """
+    Train a wave-equation PINN.
+
+    Parameters
+    ----------
+    widths : tuple[int]
+        Hidden layer widths.
+    dim : int
+        Spatial dimension — 1 or 2.
+    **kwargs
+        Forwarded to the underlying training function:
+          dim=1 → _train_pinn_1d   (supports optimizer, steps, norm, …)
+          dim=2 → _train_pinn_2d   (adam_steps, lbfgs_steps)
+
+    Returns
+    -------
+    dim=1 : (model, losses, loss_components)
+    dim=2 : (model_adam, model_lbfgs, losses)
+    """
+    if dim == 1:
+        return _train_pinn_1d(widths, **kwargs)
+    elif dim == 2:
+        return _train_pinn_2d(widths, **kwargs)
+    else:
+        raise ValueError(f"dim must be 1 or 2, got {dim!r}")
