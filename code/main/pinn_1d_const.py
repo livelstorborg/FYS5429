@@ -56,7 +56,7 @@ print_optimizer_comparison_tables(
 #          4 layers & 128 nodes, GeLU
 # =====================================================
 import matplotlib.pyplot as plt
-from src.pinn import train_wave_pinn, pack_params
+from src.pinn import train_pinn, pack_params
 
 
 def plot_optimizer_comparison(
@@ -110,8 +110,9 @@ def plot_optimizer_comparison(
 import time
 
 t0 = time.perf_counter()
-model_adam, losses_adam, _ = train_wave_pinn(
-    widths=(128, 128, 128, 128),
+model_adam, losses_adam, _ = train_pinn(
+    (128, 128, 128, 128),
+    dim=1,
     activation=jnn.gelu,
     optimizer="adam",
     steps=5000,
@@ -126,8 +127,9 @@ model_adam, losses_adam, _ = train_wave_pinn(
 print(f"Adam training time: {time.perf_counter() - t0:.1f}s")
 
 t0 = time.perf_counter()
-model_lbfgs, losses_lbfgs_cold, _ = train_wave_pinn(
-    widths=(128, 128, 128, 128),
+model_lbfgs, losses_lbfgs_cold, _ = train_pinn(
+    (128, 128, 128, 128),
+    dim=1,
     activation=jnn.gelu,
     optimizer="lbfgs",
     steps=5000,
@@ -143,8 +145,9 @@ model_lbfgs, losses_lbfgs_cold, _ = train_wave_pinn(
 print(f"L-BFGS training time: {time.perf_counter() - t0:.1f}s")
 
 t0 = time.perf_counter()
-model_lbfgs, losses_lbfgs_warm, _ = train_wave_pinn(
-    widths=(128, 128, 128, 128),
+model_lbfgs, losses_lbfgs_warm, _ = train_pinn(
+    (128, 128, 128, 128),
+    dim=1,
     activation=jnn.gelu,
     optimizer="lbfgs",
     steps=3000,
