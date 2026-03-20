@@ -4,9 +4,11 @@ pinn_wave_nnx.py
 PINN for the 1D wave equation using Flax NNX + optax (Adam / AdamW / L-BFGS).
 
 PDE:   u_tt = c^2 * u_xx,   x in [0,1], t in [0,T]
-BCs:   u(0,t) = u(1,t) = 0  (hard, via sin(pi*x) factor)
-ICs:   u(x,0) = sin(pi*x),  u_t(x,0) = 0  (soft penalty)
-Exact: u(x,t) = sin(pi*x) * cos(c*pi*t)
+BCs:   u(0,t) = u(1,t) = 0  (hard, via sin(k*pi*x) factor)
+ICs:   u(x,0) = sin(k*pi*x),  u_t(x,0) = 0  (soft penalty)
+Exact: u(x,t) = sin(k*pi*x) * cos(c*k*pi*t)
+
+The `k` parameter sets the wavenumber in the trial function.  Defaults to k=1.
 
 Design follows the Poisson-solver pattern in 1D_poisson_nnx.py:
   - Flax NNX module whose nnx.Param leaves are the weight pytree
@@ -32,23 +34,24 @@ class MLP(nnx.Module):
     MLP for the 1D wave PINN.
 
     Weights/biases are stored as nnx.Param (the JAX-pytree leaves).
-    `activation` is a plain Python attribute — treated as a static compile-time
-    constant by jax.jit (it is part of the pytree treedef, not a leaf).
+    `activation` and `k` are plain Python attributes — treated as static
+    compile-time constants by jax.jit.
 
     __call__ applies the hard BC/IC ansatz:
-        u(x,t) = sin(pi*x) + t * sin(pi*x) * N(x,t)
-    which guarantees u(0,t)=u(1,t)=0 and u(x,0)=sin(pi*x) exactly.
+        u(x,t) = sin(k*pi*x) + t * sin(k*pi*x) * N(x,t)
+    which guarantees u(0,t)=u(1,t)=0 and u(x,0)=sin(k*pi*x) exactly.
     Input xt: (N, 2)  →  Output: (N, 1).
     """
 
-    def __init__(self, widths: tuple, *, key, activation=jax.nn.tanh):
+    def __init__(self, widths: tuple, *, key, activation=jax.nn.tanh, k=1):
         keys = jax.random.split(key, len(widths) + 1)
         dims = [2] + list(widths) + [1]
         self.ws = nnx.List()
         self.bs = nnx.List()
         self.activation = activation          # plain attr, static under jax.jit
-        for k, din, dout in zip(keys, dims[:-1], dims[1:]):
-            wk, bk = jax.random.split(k)
+        self.k = k                            # plain attr, static under jax.jit
+        for k_, din, dout in zip(keys, dims[:-1], dims[1:]):
+            wk, bk = jax.random.split(k_)
             W = jax.random.normal(wk, (din, dout)) * jnp.sqrt(2.0 / din)
             b = jnp.zeros((dout,), dtype=W.dtype)
             self.ws.append(nnx.Param(W))
@@ -63,7 +66,8 @@ class MLP(nnx.Module):
         for W, b in zip(self.ws[:-1], self.bs[:-1]):
             z = act(z @ W + b)
         N = (z @ self.ws[-1] + self.bs[-1])[:, 0]        # (N,)
-        u = jnp.sin(jnp.pi * x) + t * jnp.sin(jnp.pi * x) * N
+        sx = jnp.sin(self.k * jnp.pi * x)
+        u = sx + t * sx * N
         return u[:, None]                                  # (N, 1)
 
 
@@ -97,50 +101,51 @@ def forward_params(params, xt2d, activation):
     return z @ ws[-1] + bs[-1]
 
 
-def u_hat_params(params, xt2d, activation):
+def u_hat_params(params, xt2d, activation, k):
     """
     Additive hard-IC/BC ansatz:
-        u(x,t) = sin(pi*x) + t * sin(pi*x) * N(x,t)
+        u(x,t) = sin(k*pi*x) + t * sin(k*pi*x) * N(x,t)
     Guarantees exactly:
         u(0,t) = u(1,t) = 0   (spatial BC, via sin factor)
-        u(x,0) = sin(pi*x)    (displacement IC, additive u0 term)
+        u(x,0) = sin(k*pi*x)  (displacement IC, additive u0 term)
     Only the velocity IC u_t(x,0)=0 needs a soft penalty.
     xt2d: (N, 2) → (N,)
     """
     x = xt2d[:, 0]
     t = xt2d[:, 1]
     N = forward_params(params, xt2d, activation)[:, 0]
-    return jnp.sin(jnp.pi * x) + t * jnp.sin(jnp.pi * x) * N
+    sx = jnp.sin(k * jnp.pi * x)
+    return sx + t * sx * N
 
 
-def u_scalar_params(params, x, t, activation):
+def u_scalar_params(params, x, t, activation, k):
     """Scalar u at a single (x, t) point — entry point for jax.grad."""
     xt = jnp.stack([x, t])[None]           # (1, 2)
-    return u_hat_params(params, xt, activation)[0]
+    return u_hat_params(params, xt, activation, k)[0]
 
 
 # =============================================================================
 # Derivatives  (scalar, for use inside vmap)
 # =============================================================================
 
-def u_t_params(params, x, t, activation):
+def u_t_params(params, x, t, activation, k):
     """du/dt at (x, t)."""
     return jax.grad(
-        lambda t_: u_scalar_params(params, x, t_, activation)
+        lambda t_: u_scalar_params(params, x, t_, activation, k)
     )(t)
 
 
-def u_tt_params(params, x, t, activation):
+def u_tt_params(params, x, t, activation, k):
     """d²u/dt² at (x, t)."""
     return jax.grad(
-        jax.grad(lambda t_: u_scalar_params(params, x, t_, activation))
+        jax.grad(lambda t_: u_scalar_params(params, x, t_, activation, k))
     )(t)
 
 
-def u_xx_params(params, x, t, activation):
+def u_xx_params(params, x, t, activation, k):
     """d²u/dx² at (x, t)."""
     return jax.grad(
-        jax.grad(lambda x_: u_scalar_params(params, x_, t, activation))
+        jax.grad(lambda x_: u_scalar_params(params, x_, t, activation, k))
     )(x)
 
 
@@ -156,10 +161,11 @@ def _train_step_adam(model, opt_state, x_int, t_int, x_ic, c, lambda_ic, opt,
         from loss import loss_scalar
     params = pack_params(model)
     activation = model.activation
+    k = model.k
     loss, grads = jax.value_and_grad(
         lambda p: loss_scalar(
             p, x_int, t_int, x_ic, c, lambda_ic, activation,
-            norm=norm, lambda_sob=lambda_sob, lambda_sob2=lambda_sob2,
+            norm=norm, lambda_sob=lambda_sob, lambda_sob2=lambda_sob2, k=k,
         )
     )(params)
     updates, opt_state = opt.update(grads, opt_state, params)
@@ -181,11 +187,12 @@ def _train_step_lbfgs(model, opt_state, x_int, t_int, x_ic, c, lambda_ic, opt,
         from loss import loss_scalar
     params = pack_params(model)
     activation = model.activation
+    k = model.k
 
     def loss_fn_wrapped(p):
         return loss_scalar(
             p, x_int, t_int, x_ic, c, lambda_ic, activation,
-            norm=norm, lambda_sob=lambda_sob, lambda_sob2=lambda_sob2,
+            norm=norm, lambda_sob=lambda_sob, lambda_sob2=lambda_sob2, k=k,
         )
 
     value_and_grad_fn = optax.value_and_grad_from_state(loss_fn_wrapped)
@@ -217,19 +224,20 @@ class MLP2d(nnx.Module):
     MLP for the 2D wave PINN.
 
     Hard-BC/IC ansatz:
-        u(x,y,t) = sin(πx)sin(πy) + t·sin(πx)sin(πy)·N(x,y,t)
-    Guarantees u=0 on all four walls and u(x,y,0)=sin(πx)sin(πy) exactly.
+        u(x,y,t) = sin(k·πx)sin(k·πy) + t·sin(k·πx)sin(k·πy)·N(x,y,t)
+    Guarantees u=0 on all four walls and u(x,y,0)=sin(k·πx)sin(k·πy) exactly.
     Input xyt: (N, 3) → Output: (N, 1).
     """
 
-    def __init__(self, widths: tuple, *, key, activation=jax.nn.tanh):
+    def __init__(self, widths: tuple, *, key, activation=jax.nn.tanh, k=1):
         keys = jax.random.split(key, len(widths) + 1)
         dims = [3] + list(widths) + [1]
         self.ws = nnx.List()
         self.bs = nnx.List()
         self.activation = activation
-        for k, din, dout in zip(keys, dims[:-1], dims[1:]):
-            wk, bk = jax.random.split(k)
+        self.k = k
+        for k_, din, dout in zip(keys, dims[:-1], dims[1:]):
+            wk, bk = jax.random.split(k_)
             W = jax.random.normal(wk, (din, dout)) * jnp.sqrt(2.0 / din)
             b = jnp.zeros((dout,), dtype=W.dtype)
             self.ws.append(nnx.Param(W))
@@ -244,7 +252,7 @@ class MLP2d(nnx.Module):
         for W, b in zip(self.ws[:-1], self.bs[:-1]):
             z = act(z @ W + b)
         N = (z @ self.ws[-1] + self.bs[-1])[:, 0]
-        spatial = jnp.sin(jnp.pi * x) * jnp.sin(jnp.pi * y)
+        spatial = jnp.sin(self.k * jnp.pi * x) * jnp.sin(self.k * jnp.pi * y)
         u = spatial + t * spatial * N
         return u[:, None]   # (N, 1)
 
@@ -257,8 +265,9 @@ def _train_step_adam_2d(model, opt_state, x_int, y_int, t_int, x_ic, y_ic,
         from loss import loss_scalar_2d
     params = pack_params(model)
     activation = model.activation
+    k = model.k
     loss, grads = jax.value_and_grad(
-        lambda p: loss_scalar_2d(p, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation)
+        lambda p: loss_scalar_2d(p, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation, k)
     )(params)
     updates, new_opt_state = opt.update(grads, opt_state, params)
     new_params = optax.apply_updates(params, updates)
@@ -277,9 +286,10 @@ def _train_step_lbfgs_2d(model, opt_state, x_int, y_int, t_int, x_ic, y_ic,
         from loss import loss_scalar_2d
     params = pack_params(model)
     activation = model.activation
+    k = model.k
 
     def loss_fn_wrapped(p):
-        return loss_scalar_2d(p, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation)
+        return loss_scalar_2d(p, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation, k)
 
     value_and_grad_fn = optax.value_and_grad_from_state(loss_fn_wrapped)
     value, grads = value_and_grad_fn(params, state=opt_state)
@@ -339,6 +349,10 @@ def _train_pinn_1d(
     lambda_sob=1.0,
     lambda_sob2=1.0,
     lr_schedule="cosine",
+    k=1,
+    early_stopping=False,
+    patience=100,
+    min_delta=1e-6,
 ):
     """
     Train a PINN for the 1D wave equation without time windows.
@@ -349,8 +363,8 @@ def _train_pinn_1d(
     activation        : JAX activation callable (static — one version compiled per fn)
     optimizer         : "adam" | "adamw" | "lbfgs"
     steps             : total optimisation steps (L-BFGS steps only, if warm-started)
-    adam_warmup_steps : Adam steps run before L-BFGS (only used when optimizer="lbfgs", ignored if init_params is set)
-    init_params       : optional (ws, bs) pytree — if given, model is initialised from these weights instead of random init
+    adam_warmup_steps : Adam steps run before L-BFGS (only used when optimizer="lbfgs")
+    init_params       : optional (ws, bs) pytree — if given, model is initialised from these
     N_int             : number of interior collocation points per step
     N_ic              : number of IC collocation points per step
     T                 : final time
@@ -360,21 +374,25 @@ def _train_pinn_1d(
     grad_clip         : global gradient norm clip for Adam/AdamW (set <=0 to disable)
     seed              : random seed
     log_every         : print/record interval
-    norm              : "L2" | "H1" | "H2" — PDE loss norm (see loss_nnx.py)
+    norm              : "L2" | "H1" | "H2" — PDE loss norm
     lambda_sob        : weight for ‖∇r‖² term (H1, H2)
     lambda_sob2       : weight for ‖H_r‖²_F term (H2 only)
     lr_schedule       : "cosine" | "exponential"
+    k                 : wavenumber in trial function ansatz (default 1)
+    early_stopping    : stop early if relative loss change over `patience` steps < min_delta
+    patience          : number of steps to look back for early stopping (default 100)
+    min_delta         : minimum relative change threshold (default 1e-6)
 
     Returns
     -------
     model           : trained MLP  (call model(xt) for predictions)
-    losses          : list[float], total loss at every step (warmup + L-BFGS combined)
+    losses          : list[float], total loss at every step
     loss_components : list[dict],  component losses every log_every steps
     """
     key = jax.random.PRNGKey(seed)
     key, k_model = jax.random.split(key)
 
-    model = MLP(widths, key=k_model, activation=activation)
+    model = MLP(widths, key=k_model, activation=activation, k=k)
     if init_params is not None:
         apply_params(model, init_params)
 
@@ -406,7 +424,7 @@ def _train_pinn_1d(
             def _step(params, opt_state, x_int, t_int, x_ic):
                 loss, grads = jax.value_and_grad(
                     lambda p: loss_scalar_var_1d(
-                        p, x_int, t_int, x_ic, c_arr, lambda_ic_arr, activation
+                        p, x_int, t_int, x_ic, c_arr, lambda_ic_arr, activation, k
                     )
                 )(params)
                 updates, new_state = opt_.update(grads, opt_state, params)
@@ -418,7 +436,7 @@ def _train_pinn_1d(
             def _step(params, opt_state):
                 def loss_fn_w(p):
                     return loss_scalar_var_1d(
-                        p, x_int_f, t_int_f, x_ic_f, c_arr, lambda_ic_arr, activation
+                        p, x_int_f, t_int_f, x_ic_f, c_arr, lambda_ic_arr, activation, k
                     )
                 value_and_grad_fn = optax.value_and_grad_from_state(loss_fn_w)
                 value, grads = value_and_grad_fn(params, state=opt_state)
@@ -489,6 +507,11 @@ def _train_pinn_1d(
                 losses.append(float(L))
                 if (i + 1) % log_every == 0:
                     print(f"  [warmup] step {i+1:5d} | loss={float(L):.3e}")
+                if early_stopping and len(losses) > patience:
+                    rel_change = abs(losses[-1] - losses[-patience - 1]) / (abs(losses[-patience - 1]) + 1e-30)
+                    if rel_change < min_delta:
+                        print(f"  [warmup] Early stopping at step {i+1} (rel_change={rel_change:.2e})")
+                        break
 
     # -------------------------------------------------------------------------
     # Main optimizer
@@ -547,6 +570,12 @@ def _train_pinn_1d(
 
         losses.append(float(L))
 
+        if early_stopping and len(losses) > patience:
+            rel_change = abs(losses[-1] - losses[-patience - 1]) / (abs(losses[-patience - 1]) + 1e-30)
+            if rel_change < min_delta:
+                print(f"  [{optimizer}] Early stopping at step {i+1} (rel_change={rel_change:.2e})")
+                break
+
         if (i + 1) % log_every == 0:
             try:
                 from src.loss import loss_fn
@@ -559,9 +588,9 @@ def _train_pinn_1d(
             _, comps = loss_fn(
                 params, eval_x_int, eval_t_int, eval_x_ic,
                 c_arr, lambda_ic_arr, activation,
-                norm=norm, lambda_sob=lambda_sob_arr, lambda_sob2=lambda_sob2_arr,
+                norm=norm, lambda_sob=lambda_sob_arr, lambda_sob2=lambda_sob2_arr, k=k,
             )
-            comps_f = {k: float(v) for k, v in comps.items()}
+            comps_f = {k_: float(v) for k_, v in comps.items()}
             loss_components.append(comps_f)
             log_line = (
                 f"step {i+1:5d}: loss={float(L):.3e}"
@@ -594,12 +623,17 @@ def _train_pinn_2d(
     seed=0,
     log_every=500,
     lr_schedule="cosine",
+    k=1,
 ):
     """
     Train a PINN for the 2D wave equation u_tt = c²(u_xx + u_yy).
 
     Runs `adam_steps` of Adam, then warm-starts L-BFGS from Adam's parameters
     and runs `lbfgs_steps` of L-BFGS.
+
+    Parameters
+    ----------
+    k : wavenumber in trial function ansatz (default 1)
 
     Returns
     -------
@@ -610,7 +644,7 @@ def _train_pinn_2d(
     key = jax.random.PRNGKey(seed)
     key, k_model = jax.random.split(key)
 
-    model = MLP2d(widths, key=k_model, activation=activation)
+    model = MLP2d(widths, key=k_model, activation=activation, k=k)
     if init_params is not None:
         apply_params(model, init_params)
 
@@ -645,7 +679,7 @@ def _train_pinn_2d(
             print(f"  [Adam]   step {i+1:5d} | loss={float(L):.3e}")
 
     # snapshot after Adam
-    model_adam = MLP2d(widths, key=jax.random.PRNGKey(0), activation=activation)
+    model_adam = MLP2d(widths, key=jax.random.PRNGKey(0), activation=activation, k=k)
     apply_params(model_adam, pack_params(model))
 
     # -------------------------------------------------------------------------
@@ -688,6 +722,10 @@ def train_pinn(widths, *, dim=1, **kwargs):
         Hidden layer widths.
     dim : int
         Spatial dimension — 1 or 2.
+    k : int or float
+        Wavenumber in the trial function ansatz.  The hard IC is
+        u(x,0) = sin(k·πx) in 1D, sin(k·πx)sin(k·πy) in 2D.
+        Defaults to 1.
     **kwargs
         Forwarded to the underlying training function:
           dim=1 → _train_pinn_1d   (supports optimizer, steps, norm, …)

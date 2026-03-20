@@ -541,3 +541,226 @@ def plot_2d_snapshots(field, t_indices, t_labels, title, cmap="viridis",
         plt.show()
     plt.close()
 
+
+
+
+
+def plot_optimizer_comparison(
+    *,
+    losses_adam,
+    losses_lbfgs_warm,
+    losses_lbfgs_cold,
+    smooth_window=50,
+    show=True,
+    savefig=False,
+    fig_dir=None,
+):
+    import numpy as np
+
+    lbfgs_warm_plot = [losses_adam[-1]] + list(losses_lbfgs_warm)
+
+    losses_list = [losses_adam, losses_lbfgs_cold, lbfgs_warm_plot]
+    labels = ["Adam", "L-BFGS", "Adam + L-BFGS"]
+    colors = ["black", "darkgreen", "red"]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    smoothed_data = []
+    for losses, label, color in zip(losses_list, labels, colors):
+        losses_np = np.array(losses)
+        steps = np.arange(len(losses_np))
+        ax.semilogy(steps, losses_np, color=color, alpha=0.4, linewidth=5)
+        kernel = np.ones(smooth_window) / smooth_window
+        smoothed = np.convolve(losses_np, kernel, mode="valid")
+        offset = smooth_window - 1
+        smoothed_data.append((steps[offset:], smoothed, color, label))
+
+    for steps_s, smoothed, color, label in smoothed_data:
+        ax.semilogy(steps_s, smoothed, color=color, label=label, linewidth=2)
+
+    ax.set_xlabel("Step", fontsize=16)
+    ax.set_ylabel("Loss", fontsize=16)
+    ax.set_title(r"$\mathbf{Optimizer \ Comparison}$", fontsize=18)
+    ax.tick_params(axis="both", labelsize=16)
+    ax.legend(fontsize=16)
+    ax.grid(True)
+    plt.tight_layout()
+
+    if savefig and fig_dir:
+        Path(fig_dir).mkdir(parents=True, exist_ok=True)
+        fig.savefig(Path(fig_dir) / "optimizers_loss.pdf", bbox_inches="tight")
+    if show:
+        plt.show()
+
+
+# =============================================================================
+#                   Norm comparison (L2 / H1 / H2 loss curves)
+# =============================================================================
+def plot_norm_comparison(act_name, loss_L2, loss_H1, loss_H2, savefig=True, filepath=None, show=False):
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    for losses, label, color in zip(
+        [loss_L2, loss_H1, loss_H2],
+        ["L2", "H1", "H2"],
+        ["black", "red", "steelblue"],
+    ):
+        losses_np = np.array(losses)
+        steps = np.arange(len(losses_np))
+        ax.semilogy(steps, losses_np, color=color, label=label, linewidth=2)
+
+    ax.set_xlabel("Step", fontsize=16)
+    ax.set_ylabel("Loss", fontsize=16)
+    ax.set_title(act_name, fontsize=18, fontweight="bold")
+    ax.tick_params(labelsize=14)
+    ax.legend(fontsize=14)
+    ax.grid(True)
+    plt.tight_layout()
+
+    if savefig and filepath:
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(filepath, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+    return fig
+
+
+def plot_activation_loss_sweep(
+        activation_fns,
+        data_dir,
+        fig_dir,
+        show=False,
+        savefig=True,
+):
+    """
+    Read CSVs produced by run_activation_loss_sweep and save one loss-curve PDF
+    per activation function.
+
+    Parameters
+    ----------
+    activation_fns : dict[str, callable]
+        Keys are used to find the corresponding CSV (e.g. "GeLU" -> GeLU.csv).
+    data_dir : str or Path
+    fig_dir  : str or Path
+    """
+    data_dir = Path(data_dir)
+    fig_dir = Path(fig_dir)
+    fig_dir.mkdir(parents=True, exist_ok=True)
+
+    for act_name in activation_fns:
+        csv_path = data_dir / f"{act_name}.csv"
+        if not csv_path.exists():
+            print(f"  No CSV for {act_name}, skipping.")
+            continue
+        df = pd.read_csv(csv_path)
+        curves = {
+            "L2": df["L2_loss"].tolist(),
+            "H1": df["H1_loss"].tolist(),
+            "H2": df["H2_loss"].tolist(),
+        }
+        filepath = fig_dir / f"loss_vs_step_{act_name}.pdf"
+        plot_norm_comparison(
+            act_name,
+            curves["L2"], curves["H1"], curves["H2"],
+            savefig=savefig,
+            filepath=str(filepath),
+            show=show,
+        )
+        print(f"  Saved figure: loss_vs_step_{act_name}.pdf")
+
+
+# =============================================================================
+#              Max condition number table (per activation / norm)
+# =============================================================================
+def plot_average_max_conditional_number_table(activation_fns, norms, data_dir):
+    data_dir = Path(data_dir)
+
+    col_w = 14
+    header = f"{'Activation':<14}" + "".join(f"{'max_cond_' + n:>{col_w}}" for n in norms)
+    print(header)
+    print("-" * len(header))
+
+    for act_name in activation_fns:
+        csv_path = data_dir / f"{act_name}.csv"
+        if not csv_path.exists():
+            print(f"{act_name:<14}" + "".join(f"{'N/A':>{col_w}}" for _ in norms))
+            continue
+        df = pd.read_csv(csv_path)
+        row = f"{act_name:<14}"
+        for n in norms:
+            col = f"max_cond_{n}"
+            val = df[col].mean() if col in df.columns else float("nan")
+            row += f"{val:>{col_w}.2e}"
+        print(row)
+
+
+# =============================================================================
+#                   Loss curves for multiple k values
+# =============================================================================
+def plot_loss_curve_multiple_k(k_vals, loss_curves, smooth_window=50, savefig=False, fig_dir=None):
+    """
+    One loss curve per k on a single figure.
+
+    Parameters
+    ----------
+    k_vals      : list of k values
+    loss_curves : list of loss histories, one per k
+    """
+    fig, ax = plt.subplots(figsize=(9, 6))
+    colors = plt.cm.viridis(np.linspace(0, 0.85, len(k_vals)))
+
+    for losses, k_val, color in zip(loss_curves, k_vals, colors):
+        losses_np = np.array(losses)
+        steps = np.arange(len(losses_np))
+        ax.semilogy(steps, losses_np, color=color, alpha=0.3, linewidth=3)
+        kernel = np.ones(smooth_window) / smooth_window
+        smoothed = np.convolve(losses_np, kernel, mode="valid")
+        ax.semilogy(steps[smooth_window - 1:], smoothed,
+                    color=color, linewidth=2, label=f"k={int(k_val)}")
+
+    ax.set_xlabel("Step", fontsize=16)
+    ax.set_ylabel("Loss", fontsize=16)
+    ax.set_title(r"$\mathbf{Training\ Loss\ per\ k}$", fontsize=18, fontweight="bold")
+    ax.tick_params(labelsize=14)
+    ax.legend(fontsize=14)
+    ax.grid(True)
+    plt.tight_layout()
+
+    if savefig and fig_dir:
+        Path(fig_dir).mkdir(parents=True, exist_ok=True)
+        fig.savefig(Path(fig_dir) / "loss_curves_per_k.pdf", bbox_inches="tight")
+    plt.show()
+
+
+def plot_loss_curve_multiple_c(c_vals, loss_curves, smooth_window=50, savefig=False, fig_dir=None):
+    """
+    One loss curve per c on a single figure.
+
+    Parameters
+    ----------
+    c_vals      : list of c values
+    loss_curves : list of loss histories, one per c
+    """
+    fig, ax = plt.subplots(figsize=(9, 6))
+    colors = plt.cm.viridis(np.linspace(0, 0.85, len(c_vals)))
+
+    for losses, c_val, color in zip(loss_curves, c_vals, colors):
+        losses_np = np.array(losses)
+        steps = np.arange(len(losses_np))
+        ax.semilogy(steps, losses_np, color=color, alpha=0.3, linewidth=3)
+        kernel = np.ones(smooth_window) / smooth_window
+        smoothed = np.convolve(losses_np, kernel, mode="valid")
+        ax.semilogy(steps[smooth_window - 1:], smoothed,
+                    color=color, linewidth=2, label=f"c={int(c_val)}")
+
+    ax.set_xlabel("Step", fontsize=16)
+    ax.set_ylabel("Loss", fontsize=16)
+    ax.set_title(r"$\mathbf{Training\ Loss\ per\ c}$", fontsize=18, fontweight="bold")
+    ax.tick_params(labelsize=14)
+    ax.legend(fontsize=14)
+    ax.grid(True)
+    plt.tight_layout()
+
+    if savefig and fig_dir:
+        Path(fig_dir).mkdir(parents=True, exist_ok=True)
+        fig.savefig(Path(fig_dir) / "loss_curves_per_c.pdf", bbox_inches="tight")
+    plt.show()
