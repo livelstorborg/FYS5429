@@ -5,10 +5,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import jax.nn as jnn
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
+import time
 
 from src.experiment import run_architecture_sweep
-from src.plotting import print_optimizer_comparison_tables
-
+from src.plotting import print_optimizer_comparison_tables, plot_optimizer_comparison
+from src.pinn import train_pinn, pack_params
 
 # =============================================================
 #            Full architecture sweep for all optimizers,
@@ -44,70 +46,20 @@ run_architecture_sweep(
 )
 
 
-# =====================================================
-#          Printing results from sweep in tables
-# =====================================================
+# ---------- Printing results from sweep in tables ----------
 print_optimizer_comparison_tables(
     Path(__file__).parent.parent / "data" / "1d_const"
 )
 
+
+
+
+
 # =====================================================
 #          Loss curves for best model
 #          4 layers & 128 nodes, GeLU
+#          with timing for each optimizer
 # =====================================================
-import matplotlib.pyplot as plt
-from src.pinn import train_pinn, pack_params
-
-
-def plot_optimizer_comparison(
-    *,
-    losses_adam,
-    losses_lbfgs_warm,
-    losses_lbfgs_cold,
-    smooth_window=50,
-    show=True,
-    savefig=False,
-    fig_dir=None,
-):
-    import numpy as np
-
-    lbfgs_warm_plot = [losses_adam[-1]] + list(losses_lbfgs_warm)
-
-    losses_list = [losses_adam, losses_lbfgs_cold, lbfgs_warm_plot]
-    labels = ["Adam", "L-BFGS", "Adam + L-BFGS"]
-    colors = ["black", "darkgreen", "red"]
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-
-    smoothed_data = []
-    for losses, label, color in zip(losses_list, labels, colors):
-        losses_np = np.array(losses)
-        steps = np.arange(len(losses_np))
-        ax.semilogy(steps, losses_np, color=color, alpha=0.4, linewidth=5)
-        kernel = np.ones(smooth_window) / smooth_window
-        smoothed = np.convolve(losses_np, kernel, mode="valid")
-        offset = smooth_window - 1
-        smoothed_data.append((steps[offset:], smoothed, color, label))
-
-    for steps_s, smoothed, color, label in smoothed_data:
-        ax.semilogy(steps_s, smoothed, color=color, label=label, linewidth=2)
-
-    ax.set_xlabel("Step", fontsize=16)
-    ax.set_ylabel("Loss", fontsize=16)
-    ax.set_title(r"$\mathbf{Optimizer \ Comparison}$", fontsize=18)
-    ax.tick_params(axis="both", labelsize=16)
-    ax.legend(fontsize=16)
-    ax.grid(True)
-    plt.tight_layout()
-
-    if savefig and fig_dir:
-        Path(fig_dir).mkdir(parents=True, exist_ok=True)
-        fig.savefig(Path(fig_dir) / "optimizers_loss.pdf", bbox_inches="tight")
-    if show:
-        plt.show()
-
-
-import time
 
 t0 = time.perf_counter()
 model_adam, losses_adam, _ = train_pinn(
@@ -171,4 +123,3 @@ plot_optimizer_comparison(
     savefig=True,
     fig_dir=str(Path(__file__).parent.parent / "figs" / "1d_const"),
 )
-

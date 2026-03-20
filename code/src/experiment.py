@@ -1,5 +1,7 @@
 import os
 import time
+from pathlib import Path
+
 import pandas as pd
 import jax
 import jax.nn as jnn
@@ -9,14 +11,14 @@ import numpy as np
 try:
     from src.pde import u_exact
     from src.pinn import train_pinn, pack_params
-    from src.utils import compute_error_metrics_1d, compute_error_metrics_2d
+    from src.utils import compute_error_metrics_1d, compute_error_metrics_2d, weight_condition_numbers
 except ModuleNotFoundError:
     from pde import u_exact
     from pinn import train_pinn, pack_params
-    from utils import compute_error_metrics_1d, compute_error_metrics_2d
+    from utils import compute_error_metrics_1d, compute_error_metrics_2d, weight_condition_numbers
 
 
-# ---------- Utils (might delete) ----------
+# ---------- Utils ) ----------
 def absolute_error(u_num, u_true):
     return np.abs(u_num - u_true)
 
@@ -286,9 +288,204 @@ def run_architecture_sweep_2d(
     return pd.DataFrame(all_results)
 
 
-# ---------- Learningrate sweep ----------
-def run_learning_rate_sweep():
-    pass
+
+# ----------- Activation function sweep (1D, constant losses) -----------
+def run_activation_loss_sweep(
+        activation_fns,
+        norms,
+        architecture=(128, 128, 128, 128),
+        T=1.0,
+        adam_steps=2000,
+        lbfgs_steps=1000,
+        N_int=1000,
+        N_ic=100,
+        lr=1e-3,
+        lambda_ic=100.0,
+        seed=0,
+        log_every=100,
+        k=1.0,
+        early_stopping=True,
+        patience=100,
+        min_delta=1e-6,
+        save_to_csv=False,
+        use_pre_computed=True,
+        data_dir=str(Path(__file__).parent.parent / "data" / "1d_const_losses"),
+):
+
+    data_dir = Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    all_results = {}
+
+    for act_name, act_fn in activation_fns.items():
+        print(f"\n=== Activation: {act_name} ===")
+        csv_path = data_dir / f"{act_name}.csv"
+
+        if use_pre_computed and csv_path.exists():
+            print(f"  Found cached CSV, loading ...")
+            df = pd.read_csv(csv_path)
+            curves = {
+                "L2": df["L2_loss"].tolist(),
+                "H1": df["H1_loss"].tolist(),
+                "H2": df["H2_loss"].tolist(),
+            }
+            cond_numbers = {}
+            for n in norms:
+                col = f"max_cond_{n}"
+                if col in df.columns:
+                    cond_numbers[n] = df[col].iloc[0]
+                    print(f"  max weight cond [{n}]: {cond_numbers[n]:.2e}")
+        else:
+            curves = {}
+            cond_numbers = {}
+
+            for n in norms:
+                print(f"  norm={n} ...")
+                model, losses, _ = train_pinn(
+                    architecture,
+                    dim=1,
+                    activation=act_fn,
+                    optimizer="lbfgs",
+                    steps=lbfgs_steps,
+                    adam_warmup_steps=adam_steps,
+                    N_int=N_int,
+                    N_ic=N_ic,
+                    T=T,
+                    lambda_ic=lambda_ic,
+                    lr=lr,
+                    seed=seed,
+                    log_every=log_every,
+                    k=k,
+                    norm=n,
+                    early_stopping=early_stopping,
+                    patience=patience,
+                    min_delta=min_delta,
+                )
+                curves[n] = losses
+                conds = weight_condition_numbers(model)
+                cond_numbers[n] = max(conds)
+                print(f"    final loss = {losses[-1]:.3e}")
+                print(f"    weight cond numbers: {[f'{c:.2e}' for c in conds]}  (max={cond_numbers[n]:.2e})")
+
+            if save_to_csv:
+                min_len = min(len(curves[n]) for n in norms)
+                df = pd.DataFrame({
+                    "step": np.arange(min_len),
+                    "L2_loss": np.array(curves["L2"])[:min_len],
+                    "H1_loss": np.array(curves["H1"])[:min_len],
+                    "H2_loss": np.array(curves["H2"])[:min_len],
+                    "max_cond_L2": cond_numbers["L2"],
+                    "max_cond_H1": cond_numbers["H1"],
+                    "max_cond_H2": cond_numbers["H2"],
+                })
+                df.to_csv(csv_path, index=False)
+                print(f"  Saved CSV: {act_name}.csv")
+
+        all_results[act_name] = {"curves": curves, "cond_numbers": cond_numbers}
+
+    return all_results
+
+
+# ----------- k sweep (1D, constant, L2 loss) -----------
+# ----------- c sweep (1D, constant, L2 loss) -----------
+def run_c_loss_sweep(
+        c_vals,
+        architecture=(64, 64, 64),
+        activation=jnn.gelu,
+        lbfgs_steps=1500,
+        adam_warmup_steps=1000,
+        N_int=1000,
+        N_ic=100,
+        T=1.0,
+        lambda_ic=100.0,
+        lr=1e-3,
+        seed=0,
+        log_every=500,
+):
+    """
+    Train a PINN for each c in c_vals and return loss curves as a DataFrame.
+
+    Returns
+    -------
+    pd.DataFrame with columns: c, step, loss
+    list of loss curves, one per c
+    """
+    rows = []
+    loss_curves = []
+    for c in c_vals:
+        print(f"\n--- c={int(c)} ---")
+        _, losses, _ = train_pinn(
+            architecture,
+            dim=1,
+            activation=activation,
+            optimizer="lbfgs",
+            steps=lbfgs_steps,
+            adam_warmup_steps=adam_warmup_steps,
+            N_int=N_int,
+            N_ic=N_ic,
+            T=T,
+            lambda_ic=lambda_ic,
+            lr=lr,
+            seed=seed,
+            log_every=log_every,
+            c=c,
+        )
+        loss_curves.append(losses)
+        print(f"  final loss = {losses[-1]:.3e}")
+        for step, loss in enumerate(losses):
+            rows.append({"c": c, "step": step, "loss": loss})
+
+    return pd.DataFrame(rows), loss_curves
+
+
+# ----------- k sweep (1D, constant, L2 loss) -----------
+def run_k_loss_sweep(
+        k_vals,
+        architecture=(64, 64, 64),
+        activation=jnn.gelu,
+        lbfgs_steps=1500,
+        adam_warmup_steps=1000,
+        N_int=1000,
+        N_ic=100,
+        T=1.0,
+        lambda_ic=100.0,
+        lr=1e-3,
+        seed=0,
+        log_every=500,
+):
+    """
+    Train a PINN for each k in k_vals and return loss curves as a DataFrame.
+
+    Returns
+    -------
+    pd.DataFrame with columns: k, step, loss
+    """
+    rows = []
+    loss_curves = []
+    for k in k_vals:
+        print(f"\n--- k={int(k)} ---")
+        _, losses, _ = train_pinn(
+            architecture,
+            dim=1,
+            activation=activation,
+            optimizer="lbfgs",
+            steps=lbfgs_steps,
+            adam_warmup_steps=adam_warmup_steps,
+            N_int=N_int,
+            N_ic=N_ic,
+            T=T,
+            lambda_ic=lambda_ic,
+            lr=lr,
+            seed=seed,
+            log_every=log_every,
+            k=k,
+        )
+        loss_curves.append(losses)
+        print(f"  final loss = {losses[-1]:.3e}")
+        for step, loss in enumerate(losses):
+            rows.append({"k": k, "step": step, "loss": loss})
+
+    return pd.DataFrame(rows), loss_curves
 
 
 def load_sweep_results_from_csv(data_dir="../data", activation_fns=None):

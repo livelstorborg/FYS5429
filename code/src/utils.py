@@ -82,3 +82,10 @@ def compute_error_metrics_2d(model, x, y, t, c=1.0):
     h1 = jnp.sqrt(jnp.mean(err**2) + jnp.mean(err_dx**2) + jnp.mean(err_dy**2))
 
     return float(relL2), float(Linf), float(mae), float(rmse), float(h1)
+
+def weight_condition_numbers(model):
+    """Return condition number for each weight matrix in the MLP."""
+    conds = []
+    for W in model.ws:
+        conds.append(float(np.linalg.cond(np.array(W.value))))
+    return conds
