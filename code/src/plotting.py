@@ -764,3 +764,57 @@ def plot_loss_curve_multiple_c(c_vals, loss_curves, smooth_window=50, savefig=Fa
         Path(fig_dir).mkdir(parents=True, exist_ok=True)
         fig.savefig(Path(fig_dir) / "loss_curves_per_c.pdf", bbox_inches="tight")
     plt.show()
+
+
+def plot_ck_norm_comparison(
+    curves_c1k5,
+    curves_c5k1,
+    smooth_window=50,
+    show=True,
+    savefig=False,
+    fig_dir=None,
+):
+    """
+    Two-panel subplot comparing L2/H1/H2 loss curves for (c=1,k=5) and (c=5,k=1).
+
+    Parameters
+    ----------
+    curves_c1k5 : dict with keys "L2", "H1", "H2" — loss lists for c=1, k=5
+    curves_c5k1 : dict with keys "L2", "H1", "H2" — loss lists for c=5, k=1
+    """
+    norm_colors = {"L2": "black", "H1": "red", "H2": "green"}
+    panels = [
+        (curves_c1k5, r"$c=1,\ k=5$"),
+        (curves_c5k1, r"$c=5,\ k=1$"),
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=False)
+
+    for ax, (curves, title) in zip(axes, panels):
+        smoothed_data = []
+        for norm, color in norm_colors.items():
+            losses_np = np.array(curves[norm])
+            steps = np.arange(len(losses_np))
+            ax.semilogy(steps, losses_np, color=color, alpha=0.4, linewidth=5)
+            kernel = np.ones(smooth_window) / smooth_window
+            smoothed = np.convolve(losses_np, kernel, mode="valid")
+            offset = smooth_window - 1
+            smoothed_data.append((steps[offset:], smoothed, color, norm))
+
+        for steps_s, smoothed, color, label in smoothed_data:
+            ax.semilogy(steps_s, smoothed, color=color, label=label, linewidth=2)
+
+        ax.set_xlabel("Step", fontsize=16)
+        ax.set_ylabel("Loss", fontsize=16)
+        ax.set_title(title, fontsize=18)
+        ax.tick_params(axis="both", labelsize=14)
+        ax.legend(fontsize=14)
+        ax.grid(True)
+
+    plt.tight_layout()
+
+    if savefig and fig_dir:
+        Path(fig_dir).mkdir(parents=True, exist_ok=True)
+        fig.savefig(Path(fig_dir) / "norm_comparison_ck.pdf", bbox_inches="tight")
+    if show:
+        plt.show()
