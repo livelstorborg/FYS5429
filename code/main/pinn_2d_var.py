@@ -59,6 +59,13 @@ u_fem = fem_solve(x_fem, t_fem, dx_fem, dt_fem, c=c_fn_2d, u0=u0_2d, y=y_fem, dy
 # ==================================================================
 #               PINN: adam (8000 steps) → lbfgs (5000 steps)
 # ==================================================================
+# Build interface points: ring of 64 points on the particle boundary
+_theta = np.linspace(0, 2 * np.pi, 64, endpoint=False)
+interface_pts = np.stack([
+    np.clip(z_particles[0][0] + eps * np.cos(_theta), 0.0, 1.0),
+    np.clip(z_particles[0][1] + eps * np.sin(_theta), 0.0, 1.0),
+], axis=1)  # (64, 2)
+
 _, model, losses = train_pinn(
     (128, 128, 128, 128),
     dim=2,
@@ -73,12 +80,10 @@ _, model, losses = train_pinn(
     lr=1e-3,
     seed=0,
     log_every=500,
-    interface_particles=z_particles,
-    interface_eps=eps,
-    interface_delta=delta,
-    interface_frac=0.3,
-    n_fourier=64,
-    fourier_std=2.0,
+    fourier_freqs=[1, 2, 4, 8],
+    interface_points=interface_pts,
+    bias_frac=0.3,
+    bias_std=3 * delta,
 )
 
 

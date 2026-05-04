@@ -744,9 +744,10 @@ def _train_pinn_2d(
         y_uniform = jax.random.uniform(k_uy, (n_uniform,))
         which     = jax.random.randint(k_w, (n_biased,), 0, _ipts.shape[0])
         centers   = _ipts[which]                              # (n_biased, 2)
-        noise     = jax.random.normal(jnp.stack([k_bx, k_by]), (2, n_biased)) * bias_std
-        x_biased  = jnp.clip(centers[:, 0] + noise[0], 0.0, 1.0)
-        y_biased  = jnp.clip(centers[:, 1] + noise[1], 0.0, 1.0)
+        noise_x   = jax.random.normal(k_bx, (n_biased,)) * bias_std
+        noise_y   = jax.random.normal(k_by, (n_biased,)) * bias_std
+        x_biased  = jnp.clip(centers[:, 0] + noise_x, 0.0, 1.0)
+        y_biased  = jnp.clip(centers[:, 1] + noise_y, 0.0, 1.0)
         return (
             jnp.concatenate([x_uniform, x_biased]),
             jnp.concatenate([y_uniform, y_biased]),
