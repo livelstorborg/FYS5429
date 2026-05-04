@@ -43,9 +43,13 @@ class MLP(nnx.Module):
     Input xt: (N, 2)  →  Output: (N, 1).
     """
 
-    def __init__(self, widths: tuple, *, key, activation=jax.nn.tanh, k=1):
+    def __init__(self, widths: tuple, *, key, activation=jax.nn.tanh, k=1, fourier_freqs=None):
+        # fourier_freqs: list of frequencies for Fourier feature embedding of (x, t).
+        self.fourier_freqs = tuple(fourier_freqs) if fourier_freqs is not None else None
+        in_dim = 2 if fourier_freqs is None else 2 + 4 * len(fourier_freqs)
+
         keys = jax.random.split(key, len(widths) + 1)
-        dims = [2] + list(widths) + [1]
+        dims = [in_dim] + list(widths) + [1]
         self.ws = nnx.List()
         self.bs = nnx.List()
         self.activation = activation          # plain attr, static under jax.jit
@@ -57,11 +61,24 @@ class MLP(nnx.Module):
             self.ws.append(nnx.Param(W))
             self.bs.append(nnx.Param(b))
 
+    def _encode(self, xt):
+        if self.fourier_freqs is None:
+            return xt
+        freqs = jnp.array(self.fourier_freqs)   # (F,)
+        x = xt[:, 0:1]                          # (N, 1)
+        t = xt[:, 1:2]                          # (N, 1)
+        args_x = 2 * jnp.pi * freqs * x        # (N, F)
+        args_t = 2 * jnp.pi * freqs * t        # (N, F)
+        return jnp.concatenate(
+            [xt, jnp.cos(args_x), jnp.sin(args_x), jnp.cos(args_t), jnp.sin(args_t)],
+            axis=1,
+        )
+
     def __call__(self, xt):
         """Hard-BC/IC forward pass — used for evaluation and error metrics."""
         x = xt[:, 0]
         t = xt[:, 1]
-        z = xt
+        z = self._encode(xt)
         act = self.activation
         for W, b in zip(self.ws[:-1], self.bs[:-1]):
             z = act(z @ W + b)
@@ -227,11 +244,16 @@ class MLP2d(nnx.Module):
         u(x,y,t) = sin(k·πx)sin(k·πy) + t·sin(k·πx)sin(k·πy)·N(x,y,t)
     Guarantees u=0 on all four walls and u(x,y,0)=sin(k·πx)sin(k·πy) exactly.
     Input xyt: (N, 3) → Output: (N, 1).
+
+    fourier_freqs: optional list of frequencies for Fourier feature embedding
+                  of (x, y, t).  Input dim becomes 3 + 6·len(fourier_freqs).
     """
 
-    def __init__(self, widths: tuple, *, key, activation=jax.nn.tanh, k=1):
+    def __init__(self, widths: tuple, *, key, activation=jax.nn.tanh, k=1, fourier_freqs=None):
+        self.fourier_freqs = tuple(fourier_freqs) if fourier_freqs is not None else None
+        in_dim = 3 if fourier_freqs is None else 3 + 6 * len(fourier_freqs)
         keys = jax.random.split(key, len(widths) + 1)
-        dims = [3] + list(widths) + [1]
+        dims = [in_dim] + list(widths) + [1]
         self.ws = nnx.List()
         self.bs = nnx.List()
         self.activation = activation
@@ -243,11 +265,29 @@ class MLP2d(nnx.Module):
             self.ws.append(nnx.Param(W))
             self.bs.append(nnx.Param(b))
 
+    def _encode(self, xyt):
+        if self.fourier_freqs is None:
+            return xyt
+        freqs = jnp.array(self.fourier_freqs)   # (F,)
+        x = xyt[:, 0:1]
+        y = xyt[:, 1:2]
+        t = xyt[:, 2:3]
+        args_x = 2 * jnp.pi * freqs * x
+        args_y = 2 * jnp.pi * freqs * y
+        args_t = 2 * jnp.pi * freqs * t
+        return jnp.concatenate(
+            [xyt,
+             jnp.cos(args_x), jnp.sin(args_x),
+             jnp.cos(args_y), jnp.sin(args_y),
+             jnp.cos(args_t), jnp.sin(args_t)],
+            axis=1,
+        )
+
     def __call__(self, xyt):
         x = xyt[:, 0]
         y = xyt[:, 1]
         t = xyt[:, 2]
-        z = xyt
+        z = self._encode(xyt)
         act = self.activation
         for W, b in zip(self.ws[:-1], self.bs[:-1]):
             z = act(z @ W + b)
@@ -266,6 +306,7 @@ def _train_step_adam_2d(model, opt_state, x_int, y_int, t_int, x_ic, y_ic,
     params = pack_params(model)
     activation = model.activation
     k = model.k
+    fourier_freqs = model.fourier_freqs
     loss, grads = jax.value_and_grad(
         lambda p: loss_scalar_2d(p, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation, k)
     )(params)
@@ -353,6 +394,10 @@ def _train_pinn_1d(
     early_stopping=False,
     patience=100,
     min_delta=1e-6,
+    interface_points=None,
+    bias_frac=0.3,
+    bias_std=0.012,
+    fourier_freqs=None,
 ):
     """
     Train a PINN for the 1D wave equation without time windows.
@@ -368,13 +413,13 @@ def _train_pinn_1d(
     N_int             : number of interior collocation points per step
     N_ic              : number of IC collocation points per step
     T                 : final time
-    c                 : wave speed
+    c                 : wave speed — scalar for constant-c, callable c(x,t) for variable-c
     lambda_ic         : IC loss weight
     lr                : peak learning rate
     grad_clip         : global gradient norm clip for Adam/AdamW (set <=0 to disable)
     seed              : random seed
     log_every         : print/record interval
-    norm              : "L2" | "H1" | "H2" — PDE loss norm
+    norm              : "L2" | "H1" | "H2" — PDE loss norm (constant-c only)
     lambda_sob        : weight for ‖∇r‖² term (H1, H2)
     lambda_sob2       : weight for ‖H_r‖²_F term (H2 only)
     lr_schedule       : "cosine" | "exponential"
@@ -382,6 +427,10 @@ def _train_pinn_1d(
     early_stopping    : stop early if relative loss change over `patience` steps < min_delta
     patience          : number of steps to look back for early stopping (default 100)
     min_delta         : minimum relative change threshold (default 1e-6)
+    interface_points  : list/array of x locations to cluster collocation points around
+    bias_frac         : fraction of N_int points placed near interface_points (default 0.3)
+    bias_std          : std dev of Gaussian bias around each interface point (default 0.012)
+    fourier_freqs     : list of frequencies for Fourier feature encoding, e.g. [1,2,4,8]
 
     Returns
     -------
@@ -392,7 +441,7 @@ def _train_pinn_1d(
     key = jax.random.PRNGKey(seed)
     key, k_model = jax.random.split(key)
 
-    model = MLP(widths, key=k_model, activation=activation, k=k)
+    model = MLP(widths, key=k_model, activation=activation, k=k, fourier_freqs=fourier_freqs)
     if init_params is not None:
         apply_params(model, init_params)
 
@@ -402,6 +451,21 @@ def _train_pinn_1d(
 
     is_var_c = callable(c)
     c_arr    = c if is_var_c else jnp.array(c)
+
+    # Biased sampler: clusters `bias_frac` of points near interface boundaries.
+    _ipts = jnp.array(interface_points) if interface_points is not None else None
+
+    def _sample_x(key, n):
+        if _ipts is None or bias_frac <= 0.0:
+            return jax.random.uniform(key, (n,), minval=0.0, maxval=1.0)
+        n_biased  = int(n * bias_frac)
+        n_uniform = n - n_biased
+        key, k_u, k_b, k_w = jax.random.split(key, 4)
+        x_uniform = jax.random.uniform(k_u, (n_uniform,), minval=0.0, maxval=1.0)
+        which    = jax.random.randint(k_w, (n_biased,), 0, _ipts.shape[0])
+        x_biased = _ipts[which] + jax.random.normal(k_b, (n_biased,)) * bias_std
+        x_biased = jnp.clip(x_biased, 0.0, 1.0)
+        return jnp.concatenate([x_uniform, x_biased])
 
     opt_lower = optimizer.lower()
     is_lbfgs  = opt_lower == "lbfgs"
@@ -424,7 +488,7 @@ def _train_pinn_1d(
             def _step(params, opt_state, x_int, t_int, x_ic):
                 loss, grads = jax.value_and_grad(
                     lambda p: loss_scalar_var_1d(
-                        p, x_int, t_int, x_ic, c_arr, lambda_ic_arr, activation, k
+                        p, x_int, t_int, x_ic, c_arr, lambda_ic_arr, activation, k, fourier_freqs
                     )
                 )(params)
                 updates, new_state = opt_.update(grads, opt_state, params)
@@ -436,7 +500,7 @@ def _train_pinn_1d(
             def _step(params, opt_state):
                 def loss_fn_w(p):
                     return loss_scalar_var_1d(
-                        p, x_int_f, t_int_f, x_ic_f, c_arr, lambda_ic_arr, activation, k
+                        p, x_int_f, t_int_f, x_ic_f, c_arr, lambda_ic_arr, activation, k, fourier_freqs
                     )
                 value_and_grad_fn = optax.value_and_grad_from_state(loss_fn_w)
                 value, grads = value_and_grad_fn(params, state=opt_state)
@@ -453,7 +517,7 @@ def _train_pinn_1d(
             state = opt_.init(pack_params(model))
             for i in range(n_steps):
                 key, k_x, k_t, k_ic = jax.random.split(key, 4)
-                x_int = jax.random.uniform(k_x,  (N_int,), minval=0.0, maxval=1.0)
+                x_int = _sample_x(k_x, N_int)
                 t_int = jax.random.uniform(k_t,  (N_int,), minval=0.0, maxval=T)
                 x_ic  = jax.random.uniform(k_ic, (N_ic,),  minval=0.0, maxval=1.0)
                 new_params, state, L = step_fn(pack_params(model), state, x_int, t_int, x_ic)
@@ -466,8 +530,8 @@ def _train_pinn_1d(
         def _run_var_lbfgs(n_steps, opt_):
             nonlocal key
             key, k_x, k_t, k_ic = jax.random.split(key, 4)
-            x_f = jax.random.uniform(k_x,  (N_int,), minval=0.0, maxval=1.0)
-            t_f = jax.random.uniform(k_t,  (N_int,), minval=0.0, maxval=T)
+            x_f  = _sample_x(k_x, N_int)
+            t_f  = jax.random.uniform(k_t,  (N_int,), minval=0.0, maxval=T)
             ic_f = jax.random.uniform(k_ic, (N_ic,),  minval=0.0, maxval=1.0)
             step_fn = _make_var_lbfgs_step(opt_, x_f, t_f, ic_f)
             state = opt_.init(pack_params(model))
@@ -624,16 +688,26 @@ def _train_pinn_2d(
     log_every=500,
     lr_schedule="cosine",
     k=1,
+    fourier_freqs=None,
+    interface_points=None,
+    bias_frac=0.3,
+    bias_std=0.012,
 ):
     """
-    Train a PINN for the 2D wave equation u_tt = c²(u_xx + u_yy).
+    Train a PINN for the 2D wave equation u_tt = c²(u_xx + u_yy)
+    or variable-c conservative form u_tt = ∇·(c²∇u).
 
     Runs `adam_steps` of Adam, then warm-starts L-BFGS from Adam's parameters
     and runs `lbfgs_steps` of L-BFGS.
 
     Parameters
     ----------
-    k : wavenumber in trial function ansatz (default 1)
+    widths           : tuple of ints, hidden layer widths
+    c                : wave speed — scalar for constant-c, callable c(x,y,t) for variable-c
+    fourier_freqs    : list of frequencies for Fourier feature encoding, e.g. [1,2,4,8]
+    interface_points : (M, 2) array of (x, y) locations to bias collocation points toward
+    bias_frac        : fraction of N_int points placed near interface_points (default 0.3)
+    bias_std         : std dev of Gaussian bias around each interface point (default 0.012)
 
     Returns
     -------
@@ -644,13 +718,78 @@ def _train_pinn_2d(
     key = jax.random.PRNGKey(seed)
     key, k_model = jax.random.split(key)
 
-    model = MLP2d(widths, key=k_model, activation=activation, k=k)
+    model = MLP2d(widths, key=k_model, activation=activation, k=k, fourier_freqs=fourier_freqs)
     if init_params is not None:
         apply_params(model, init_params)
 
-    c_arr         = jnp.array(c)
+    is_var_c = callable(c)
+    c_arr         = c if is_var_c else jnp.array(c)
     lambda_ic_arr = jnp.array(lambda_ic)
     losses: list[float] = []
+
+    # -------------------------------------------------------------------------
+    # Biased collocation sampler — clusters points near interface_points in (x,y)
+    # -------------------------------------------------------------------------
+    _ipts = jnp.array(interface_points) if interface_points is not None else None   # (M, 2)
+
+    def _sample_xy(key, n):
+        """Sample (x, y) pairs with optional bias toward interface_points."""
+        if _ipts is None or bias_frac <= 0.0:
+            kx, ky = jax.random.split(key)
+            return jax.random.uniform(kx, (n,)), jax.random.uniform(ky, (n,))
+        n_biased  = int(n * bias_frac)
+        n_uniform = n - n_biased
+        key, k_ux, k_uy, k_bx, k_by, k_w = jax.random.split(key, 6)
+        x_uniform = jax.random.uniform(k_ux, (n_uniform,))
+        y_uniform = jax.random.uniform(k_uy, (n_uniform,))
+        which     = jax.random.randint(k_w, (n_biased,), 0, _ipts.shape[0])
+        centers   = _ipts[which]                              # (n_biased, 2)
+        noise     = jax.random.normal(jnp.stack([k_bx, k_by]), (2, n_biased)) * bias_std
+        x_biased  = jnp.clip(centers[:, 0] + noise[0], 0.0, 1.0)
+        y_biased  = jnp.clip(centers[:, 1] + noise[1], 0.0, 1.0)
+        return (
+            jnp.concatenate([x_uniform, x_biased]),
+            jnp.concatenate([y_uniform, y_biased]),
+        )
+
+    # -------------------------------------------------------------------------
+    # Variable-c: build JIT closures so c_fn never becomes a traced argument
+    # -------------------------------------------------------------------------
+    if is_var_c:
+        try:
+            from src.loss import loss_scalar_var_2d
+        except ModuleNotFoundError:
+            from loss import loss_scalar_var_2d
+
+        def _make_var_adam_step_2d(opt_):
+            @jax.jit
+            def _step(params, opt_state, x_int, y_int, t_int, x_ic, y_ic):
+                loss, grads = jax.value_and_grad(
+                    lambda p: loss_scalar_var_2d(
+                        p, x_int, y_int, t_int, x_ic, y_ic,
+                        c_arr, lambda_ic_arr, activation, k, fourier_freqs
+                    )
+                )(params)
+                updates, new_state = opt_.update(grads, opt_state, params)
+                return optax.apply_updates(params, updates), new_state, loss
+            return _step
+
+        def _make_var_lbfgs_step_2d(opt_, x_f, y_f, t_f, x_ic_f, y_ic_f):
+            @jax.jit
+            def _step(params, opt_state):
+                def loss_fn_w(p):
+                    return loss_scalar_var_2d(
+                        p, x_f, y_f, t_f, x_ic_f, y_ic_f,
+                        c_arr, lambda_ic_arr, activation, k, fourier_freqs
+                    )
+                value_and_grad_fn = optax.value_and_grad_from_state(loss_fn_w)
+                value, grads = value_and_grad_fn(params, state=opt_state)
+                updates, new_state = opt_.update(
+                    grads, opt_state, params,
+                    value=value, grad=grads, value_fn=loss_fn_w,
+                )
+                return optax.apply_updates(params, updates), new_state, value
+            return _step
 
     # -------------------------------------------------------------------------
     # Adam phase
@@ -663,44 +802,62 @@ def _train_pinn_2d(
 
     adam_state = adam_opt.init(pack_params(model))
 
+    if is_var_c:
+        adam_step_fn = _make_var_adam_step_2d(adam_opt)
+
     for i in range(adam_steps):
-        key, k_x, k_y, k_t, k_ix, k_iy = jax.random.split(key, 6)
-        x_int = jax.random.uniform(k_x,  (N_int,))
-        y_int = jax.random.uniform(k_y,  (N_int,))
+        key, k_xy, k_t, k_ix, k_iy = jax.random.split(key, 5)
+        x_int, y_int = _sample_xy(k_xy, N_int)
         t_int = jax.random.uniform(k_t,  (N_int,), maxval=T)
         x_ic  = jax.random.uniform(k_ix, (N_ic,))
         y_ic  = jax.random.uniform(k_iy, (N_ic,))
-        model, adam_state, L = train_step_adam_2d(
-            model, adam_state, x_int, y_int, t_int, x_ic, y_ic,
-            c_arr, lambda_ic_arr, adam_opt,
-        )
+
+        if is_var_c:
+            new_params, adam_state, L = adam_step_fn(
+                pack_params(model), adam_state, x_int, y_int, t_int, x_ic, y_ic
+            )
+            apply_params(model, new_params)
+        else:
+            model, adam_state, L = train_step_adam_2d(
+                model, adam_state, x_int, y_int, t_int, x_ic, y_ic,
+                c_arr, lambda_ic_arr, adam_opt,
+            )
         losses.append(float(L))
         if (i + 1) % log_every == 0:
             print(f"  [Adam]   step {i+1:5d} | loss={float(L):.3e}")
 
     # snapshot after Adam
-    model_adam = MLP2d(widths, key=jax.random.PRNGKey(0), activation=activation, k=k)
+    model_adam = MLP2d(widths, key=jax.random.PRNGKey(0), activation=activation, k=k,
+                       fourier_freqs=fourier_freqs)
     apply_params(model_adam, pack_params(model))
 
     # -------------------------------------------------------------------------
     # L-BFGS phase  (fixed collocation points)
     # -------------------------------------------------------------------------
     lbfgs_opt = optax.lbfgs()
-    key, k_x, k_y, k_t, k_ix, k_iy = jax.random.split(key, 6)
-    x_int_fixed = jax.random.uniform(k_x,  (N_int,))
-    y_int_fixed = jax.random.uniform(k_y,  (N_int,))
+    key, k_xy, k_t, k_ix, k_iy = jax.random.split(key, 5)
+    x_int_fixed, y_int_fixed = _sample_xy(k_xy, N_int)
     t_int_fixed = jax.random.uniform(k_t,  (N_int,), maxval=T)
     x_ic_fixed  = jax.random.uniform(k_ix, (N_ic,))
     y_ic_fixed  = jax.random.uniform(k_iy, (N_ic,))
 
     lbfgs_state = lbfgs_opt.init(pack_params(model))
 
-    for i in range(lbfgs_steps):
-        model, lbfgs_state, L = train_step_lbfgs_2d(
-            model, lbfgs_state,
-            x_int_fixed, y_int_fixed, t_int_fixed, x_ic_fixed, y_ic_fixed,
-            c_arr, lambda_ic_arr, lbfgs_opt,
+    if is_var_c:
+        lbfgs_step_fn = _make_var_lbfgs_step_2d(
+            lbfgs_opt, x_int_fixed, y_int_fixed, t_int_fixed, x_ic_fixed, y_ic_fixed
         )
+
+    for i in range(lbfgs_steps):
+        if is_var_c:
+            new_params, lbfgs_state, L = lbfgs_step_fn(pack_params(model), lbfgs_state)
+            apply_params(model, new_params)
+        else:
+            model, lbfgs_state, L = train_step_lbfgs_2d(
+                model, lbfgs_state,
+                x_int_fixed, y_int_fixed, t_int_fixed, x_ic_fixed, y_ic_fixed,
+                c_arr, lambda_ic_arr, lbfgs_opt,
+            )
         losses.append(float(L))
         if (i + 1) % log_every == 0:
             print(f"  [L-BFGS] step {i+1:5d} | loss={float(L):.3e}")
@@ -726,6 +883,17 @@ def train_pinn(widths, *, dim=1, **kwargs):
         Wavenumber in the trial function ansatz.  The hard IC is
         u(x,0) = sin(k·πx) in 1D, sin(k·πx)sin(k·πy) in 2D.
         Defaults to 1.
+    fourier_freqs : list[float] or None
+        Frequencies for Fourier feature encoding, e.g. [1,2,4,8].
+        Applies to both constant-c and variable-c paths.
+    interface_points : array-like or None
+        Locations to bias collocation points toward.
+        1D: 1D array of x positions.
+        2D: (M,2) array of (x,y) positions.
+    bias_frac : float
+        Fraction of interior points clustered near interface_points.
+    bias_std : float
+        Std dev of Gaussian noise around each interface point.
     **kwargs
         Forwarded to the underlying training function:
           dim=1 → _train_pinn_1d   (supports optimizer, steps, norm, …)
@@ -742,3 +910,6 @@ def train_pinn(widths, *, dim=1, **kwargs):
         return _train_pinn_2d(widths, **kwargs)
     else:
         raise ValueError(f"dim must be 1 or 2, got {dim!r}")
+
+
+
