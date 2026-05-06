@@ -33,14 +33,15 @@ import jax.numpy as jnp
 # has no dependency on pinn_wave_nnx.py.
 # =============================================================================
 
+
 def _encode_fourier(xt2d, fourier_freqs):
     if fourier_freqs is None:
         return xt2d
-    freqs = jnp.array(fourier_freqs)        # (F,)
-    x = xt2d[:, 0:1]                        # (N, 1)
-    t = xt2d[:, 1:2]                        # (N, 1)
-    args_x = 2 * jnp.pi * freqs * x        # (N, F)
-    args_t = 2 * jnp.pi * freqs * t        # (N, F)
+    freqs = jnp.array(fourier_freqs)  # (F,)
+    x = xt2d[:, 0:1]  # (N, 1)
+    t = xt2d[:, 1:2]  # (N, 1)
+    args_x = 2 * jnp.pi * freqs * x  # (N, F)
+    args_t = 2 * jnp.pi * freqs * t  # (N, F)
     return jnp.concatenate(
         [xt2d, jnp.cos(args_x), jnp.sin(args_x), jnp.cos(args_t), jnp.sin(args_t)],
         axis=1,
@@ -70,24 +71,33 @@ def _u_scalar(params, x, t, activation, k, fourier_freqs=None):
 
 
 def _u_t(params, x, t, activation, k, fourier_freqs=None):
-    return jax.grad(lambda t_: _u_scalar(params, x, t_, activation, k, fourier_freqs))(t)
+    return jax.grad(lambda t_: _u_scalar(params, x, t_, activation, k, fourier_freqs))(
+        t
+    )
 
 
 def _u_tt(params, x, t, activation, k, fourier_freqs=None):
-    return jax.grad(jax.grad(lambda t_: _u_scalar(params, x, t_, activation, k, fourier_freqs)))(t)
+    return jax.grad(
+        jax.grad(lambda t_: _u_scalar(params, x, t_, activation, k, fourier_freqs))
+    )(t)
 
 
 def _u_xx(params, x, t, activation, k, fourier_freqs=None):
-    return jax.grad(jax.grad(lambda x_: _u_scalar(params, x_, t, activation, k, fourier_freqs)))(x)
+    return jax.grad(
+        jax.grad(lambda x_: _u_scalar(params, x_, t, activation, k, fourier_freqs))
+    )(x)
 
 
 def _u_x(params, x, t, activation, k, fourier_freqs=None):
-    return jax.grad(lambda x_: _u_scalar(params, x_, t, activation, k, fourier_freqs))(x)
+    return jax.grad(lambda x_: _u_scalar(params, x_, t, activation, k, fourier_freqs))(
+        x
+    )
 
 
 # =============================================================================
 # Scalar residual
 # =============================================================================
+
 
 def r_scalar_params(params, x, t, c, activation, k):
     """Scalar PDE residual r = u_tt - c² u_xx at a single (x, t) point."""
@@ -100,12 +110,14 @@ def r_scalar_params(params, x, t, c, activation, k):
 # PDE residual terms — one function per norm
 # =============================================================================
 
+
 def pde_terms_l2(params, x_int, t_int, c, activation, k):
     """
     L2: mean(r²).
 
     Returns (loss_pde, extra_dict).  extra_dict is empty for L2.
     """
+
     def r_single(xi, ti):
         return r_scalar_params(params, xi, ti, c, activation, k)
 
@@ -121,6 +133,7 @@ def pde_terms_h1(params, x_int, t_int, c, activation, k):
 
     Returns (loss_pde, {"sobolev": loss_sob}).
     """
+
     def r_and_grad_single(xi, ti):
         r = r_scalar_params(params, xi, ti, c, activation, k)
         dr_dx, dr_dt = jax.grad(r_scalar_params, argnums=(1, 2))(
@@ -141,6 +154,7 @@ def pde_terms_h2(params, x_int, t_int, c, activation, k):
 
     Returns (loss_pde, {"sobolev": loss_sob, "sobolev2": loss_sob2}).
     """
+
     def r_of_xt(xt, params, c, activation, k):
         return r_scalar_params(params, xt[0], xt[1], c, activation, k)
 
@@ -148,14 +162,14 @@ def pde_terms_h2(params, x_int, t_int, c, activation, k):
         xt = jnp.stack([xi, ti])
         r = r_of_xt(xt, params, c, activation, k)
 
-        grad_r = jax.grad(r_of_xt)(xt, params, c, activation, k)          # (2,)
-        hess_r = jax.hessian(r_of_xt)(xt, params, c, activation, k)       # (2, 2)
+        grad_r = jax.grad(r_of_xt)(xt, params, c, activation, k)  # (2,)
+        hess_r = jax.hessian(r_of_xt)(xt, params, c, activation, k)  # (2, 2)
 
         return r**2, jnp.sum(grad_r**2), jnp.sum(hess_r**2)
 
     r_sq, grad_sq, hess_sq = jax.vmap(terms_single)(x_int, t_int)
     return r_sq.mean(), {
-        "sobolev":  grad_sq.mean(),
+        "sobolev": grad_sq.mean(),
         "sobolev2": hess_sq.mean(),
     }
 
@@ -163,6 +177,7 @@ def pde_terms_h2(params, x_int, t_int, c, activation, k):
 # =============================================================================
 # Unified loss function
 # =============================================================================
+
 
 def loss_fn(
     params,
@@ -244,8 +259,17 @@ def loss_scalar(
 ):
     """Scalar wrapper — pass to jax.grad or optax's value_and_grad_from_state."""
     loss, _ = loss_fn(
-        params, x_int, t_int, x_ic, c, lambda_ic, activation,
-        norm=norm, lambda_sob=lambda_sob, lambda_sob2=lambda_sob2, k=k,
+        params,
+        x_int,
+        t_int,
+        x_ic,
+        c,
+        lambda_ic,
+        activation,
+        norm=norm,
+        lambda_sob=lambda_sob,
+        lambda_sob2=lambda_sob2,
+        k=k,
     )
     return loss
 
@@ -256,17 +280,20 @@ def loss_scalar(
 # c_fn must be captured in the JIT closure, not passed as a traced argument.
 # =============================================================================
 
+
 def r_scalar_params_var_1d(params, x, t, c_fn, activation, k, fourier_freqs=None):
     """PDE residual r = u_tt - ∂_x(c²∂_x u) at a single (x,t) point (conservative form)."""
     utt = _u_tt(params, x, t, activation, k, fourier_freqs)
     uxx = _u_xx(params, x, t, activation, k, fourier_freqs)
-    ux  = _u_x( params, x, t, activation, k, fourier_freqs)
-    c2     = c_fn(x, t) ** 2
+    ux = _u_x(params, x, t, activation, k, fourier_freqs)
+    c2 = c_fn(x, t) ** 2
     dc2_dx = jax.grad(lambda x_: c_fn(x_, t) ** 2)(x)
     return utt - c2 * uxx - dc2_dx * ux
 
 
-def loss_scalar_var_1d(params, x_int, t_int, x_ic, c_fn, lambda_ic, activation, k=1.0, fourier_freqs=None):
+def loss_scalar_var_1d(
+    params, x_int, t_int, x_ic, c_fn, lambda_ic, activation, k=1.0, fourier_freqs=None
+):
     """
     Scalar loss for 1D variable-c PINN (conservative form).
 
@@ -282,14 +309,19 @@ def loss_scalar_var_1d(params, x_int, t_int, x_ic, c_fn, lambda_ic, activation, 
     k            : wavenumber in ansatz
     fourier_freqs: list of frequencies for Fourier feature encoding, or None
     """
+
     def r_single(xi, ti):
-        return r_scalar_params_var_1d(params, xi, ti, c_fn, activation, k, fourier_freqs)
+        return r_scalar_params_var_1d(
+            params, xi, ti, c_fn, activation, k, fourier_freqs
+        )
 
     loss_pde = jnp.mean(jax.vmap(r_single)(x_int, t_int) ** 2)
 
     t0 = jnp.zeros(())
-    u_t_ic = jax.vmap(lambda xi: _u_t(params, xi, t0, activation, k, fourier_freqs))(x_ic)
-    loss_ic_ut = jnp.mean(u_t_ic ** 2)
+    u_t_ic = jax.vmap(lambda xi: _u_t(params, xi, t0, activation, k, fourier_freqs))(
+        x_ic
+    )
+    loss_ic_ut = jnp.mean(u_t_ic**2)
 
     return loss_pde + lambda_ic * loss_ic_ut
 
@@ -299,22 +331,28 @@ def loss_scalar_var_1d(params, x_int, t_int, x_ic, c_fn, lambda_ic, activation, 
 # Hard-BC/IC ansatz: u(x,y,t) = sin(k·πx)sin(k·πy) + t·sin(k·πx)sin(k·πy)·N(x,y,t)
 # =============================================================================
 
+
 def _encode_fourier_2d(xyt, fourier_freqs):
     """Fourier feature encoding for 3-input (x, y, t) coordinates."""
     if fourier_freqs is None:
         return xyt
-    freqs = jnp.array(fourier_freqs)       # (F,)
-    x = xyt[:, 0:1]                        # (N, 1)
-    y = xyt[:, 1:2]                        # (N, 1)
-    t = xyt[:, 2:3]                        # (N, 1)
-    args_x = 2 * jnp.pi * freqs * x       # (N, F)
-    args_y = 2 * jnp.pi * freqs * y       # (N, F)
-    args_t = 2 * jnp.pi * freqs * t       # (N, F)
+    freqs = jnp.array(fourier_freqs)  # (F,)
+    x = xyt[:, 0:1]  # (N, 1)
+    y = xyt[:, 1:2]  # (N, 1)
+    t = xyt[:, 2:3]  # (N, 1)
+    args_x = 2 * jnp.pi * freqs * x  # (N, F)
+    args_y = 2 * jnp.pi * freqs * y  # (N, F)
+    args_t = 2 * jnp.pi * freqs * t  # (N, F)
     return jnp.concatenate(
-        [xyt,
-         jnp.cos(args_x), jnp.sin(args_x),
-         jnp.cos(args_y), jnp.sin(args_y),
-         jnp.cos(args_t), jnp.sin(args_t)],
+        [
+            xyt,
+            jnp.cos(args_x),
+            jnp.sin(args_x),
+            jnp.cos(args_y),
+            jnp.sin(args_y),
+            jnp.cos(args_t),
+            jnp.sin(args_t),
+        ],
         axis=1,
     )
 
@@ -349,23 +387,34 @@ def _u_scalar_2d(params, x, y, t, activation, k, fourier_freqs=None):
 
 
 def _u_t_2d(params, x, y, t, activation, k, fourier_freqs=None):
-    return jax.grad(lambda t_: _u_scalar_2d(params, x, y, t_, activation, k, fourier_freqs))(t)
+    return jax.grad(
+        lambda t_: _u_scalar_2d(params, x, y, t_, activation, k, fourier_freqs)
+    )(t)
 
 
 def r_scalar_params_2d(params, x, y, t, c, activation, k):
     """PDE residual r = u_tt - c²(u_xx + u_yy) at a single (x,y,t) point."""
-    utt = jax.grad(jax.grad(lambda t_: _u_scalar_2d(params, x, y, t_, activation, k)))(t)
-    uxx = jax.grad(jax.grad(lambda x_: _u_scalar_2d(params, x_, y, t, activation, k)))(x)
-    uyy = jax.grad(jax.grad(lambda y_: _u_scalar_2d(params, x, y_, t, activation, k)))(y)
+    utt = jax.grad(jax.grad(lambda t_: _u_scalar_2d(params, x, y, t_, activation, k)))(
+        t
+    )
+    uxx = jax.grad(jax.grad(lambda x_: _u_scalar_2d(params, x_, y, t, activation, k)))(
+        x
+    )
+    uyy = jax.grad(jax.grad(lambda y_: _u_scalar_2d(params, x, y_, t, activation, k)))(
+        y
+    )
     return utt - c**2 * (uxx + uyy)
 
 
-def loss_fn_2d(params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation, k=1.0):
+def loss_fn_2d(
+    params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation, k=1.0
+):
     """
     2D PINN loss: MSE PDE residual + lambda_ic * MSE velocity IC.
 
     Returns (total_loss, {"pde": ..., "ic_ut": ...}).
     """
+
     def r_single(xi, yi, ti):
         return r_scalar_params_2d(params, xi, yi, ti, c, activation, k)
 
@@ -373,16 +422,22 @@ def loss_fn_2d(params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation
     loss_pde = jnp.mean(r**2)
 
     t0 = jnp.zeros(())
-    u_t_ic = jax.vmap(lambda xi, yi: _u_t_2d(params, xi, yi, t0, activation, k))(x_ic, y_ic)
+    u_t_ic = jax.vmap(lambda xi, yi: _u_t_2d(params, xi, yi, t0, activation, k))(
+        x_ic, y_ic
+    )
     loss_ic_ut = jnp.mean(u_t_ic**2)
 
     total = loss_pde + lambda_ic * loss_ic_ut
     return total, {"pde": loss_pde, "ic_ut": loss_ic_ut}
 
 
-def loss_scalar_2d(params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation, k=1.0):
+def loss_scalar_2d(
+    params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation, k=1.0
+):
     """Scalar wrapper for 2D loss — pass to jax.grad or optax."""
-    loss, _ = loss_fn_2d(params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation, k)
+    loss, _ = loss_fn_2d(
+        params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activation, k
+    )
     return loss
 
 
@@ -392,27 +447,56 @@ def loss_scalar_2d(params, x_int, y_int, t_int, x_ic, y_ic, c, lambda_ic, activa
 # c_fn must be captured in the JIT closure, not passed as a traced argument.
 # =============================================================================
 
+
 def r_scalar_params_var_2d(params, x, y, t, c_fn, activation, k, fourier_freqs=None):
     """
     PDE residual r = u_tt - ∇·(c²∇u) at a single (x,y,t) point (conservative form).
 
     ∇·(c²∇u) = c²(u_xx + u_yy) + (∂_x c²)u_x + (∂_y c²)u_y
     """
-    utt = jax.grad(jax.grad(lambda t_: _u_scalar_2d(params, x, y, t_, activation, k, fourier_freqs)))(t)
-    uxx = jax.grad(jax.grad(lambda x_: _u_scalar_2d(params, x_, y, t, activation, k, fourier_freqs)))(x)
-    uyy = jax.grad(jax.grad(lambda y_: _u_scalar_2d(params, x, y_, t, activation, k, fourier_freqs)))(y)
-    ux  = jax.grad(lambda x_: _u_scalar_2d(params, x_, y, t, activation, k, fourier_freqs))(x)
-    uy  = jax.grad(lambda y_: _u_scalar_2d(params, x, y_, t, activation, k, fourier_freqs))(y)
+    utt = jax.grad(
+        jax.grad(
+            lambda t_: _u_scalar_2d(params, x, y, t_, activation, k, fourier_freqs)
+        )
+    )(t)
+    uxx = jax.grad(
+        jax.grad(
+            lambda x_: _u_scalar_2d(params, x_, y, t, activation, k, fourier_freqs)
+        )
+    )(x)
+    uyy = jax.grad(
+        jax.grad(
+            lambda y_: _u_scalar_2d(params, x, y_, t, activation, k, fourier_freqs)
+        )
+    )(y)
+    ux = jax.grad(
+        lambda x_: _u_scalar_2d(params, x_, y, t, activation, k, fourier_freqs)
+    )(x)
+    uy = jax.grad(
+        lambda y_: _u_scalar_2d(params, x, y_, t, activation, k, fourier_freqs)
+    )(y)
 
-    c2_fn  = lambda x_, y_: c_fn(x_, y_, t) ** 2
+    c2_fn = lambda x_, y_: c_fn(x_, y_, t) ** 2
     dc2_dx = jax.grad(c2_fn, argnums=0)(x, y)
     dc2_dy = jax.grad(c2_fn, argnums=1)(x, y)
-    c2     = c_fn(x, y, t) ** 2
+    c2 = c_fn(x, y, t) ** 2
 
     return utt - c2 * (uxx + uyy) - dc2_dx * ux - dc2_dy * uy
 
 
-def loss_scalar_var_2d(params, x_int, y_int, t_int, x_ic, y_ic, c_fn, lambda_ic, activation, k=1.0, fourier_freqs=None):
+def loss_scalar_var_2d(
+    params,
+    x_int,
+    y_int,
+    t_int,
+    x_ic,
+    y_ic,
+    c_fn,
+    lambda_ic,
+    activation,
+    k=1.0,
+    fourier_freqs=None,
+):
     """
     Scalar loss for 2D variable-c PINN (conservative form).
 
@@ -430,8 +514,11 @@ def loss_scalar_var_2d(params, x_int, y_int, t_int, x_ic, y_ic, c_fn, lambda_ic,
     k            : wavenumber in ansatz
     fourier_freqs: list of frequencies for Fourier feature encoding, or None
     """
+
     def r_single(xi, yi, ti):
-        return r_scalar_params_var_2d(params, xi, yi, ti, c_fn, activation, k, fourier_freqs)
+        return r_scalar_params_var_2d(
+            params, xi, yi, ti, c_fn, activation, k, fourier_freqs
+        )
 
     loss_pde = jnp.mean(jax.vmap(r_single)(x_int, y_int, t_int) ** 2)
 
@@ -439,6 +526,6 @@ def loss_scalar_var_2d(params, x_int, y_int, t_int, x_ic, y_ic, c_fn, lambda_ic,
     u_t_ic = jax.vmap(
         lambda xi, yi: _u_t_2d(params, xi, yi, t0, activation, k, fourier_freqs)
     )(x_ic, y_ic)
-    loss_ic_ut = jnp.mean(u_t_ic ** 2)
+    loss_ic_ut = jnp.mean(u_t_ic**2)
 
     return loss_pde + lambda_ic * loss_ic_ut
